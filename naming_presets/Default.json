@@ -1,0 +1,46 @@
+{
+    "_info": [
+        "Atlas Mapper - naming preset: texture identification rules used by the folder scan.",
+        "One preset = one .json file of the naming_presets folder; its name (without .json) appears in the 'Naming convention' list. To create a preset, copy this file, rename the copy and edit it. To delete one, delete its file.",
+        "Edit this file freely, then click 'Scan folder' again.",
+        "File names are converted to lowercase before comparison: write keywords in lowercase.",
+        "A keyword is a SUFFIX: it must be at the very end of the file name, just before the extension.",
+        "If several keywords match, the longest one wins (e.g. '_basecolor' before '_bc').",
+        "A keyword can only belong to one texture format.",
+        "packed_formats: one file holding several maps, one per channel. 'suffixes' works like texture_formats; R / G / B name the map stored in that channel (a name from texture_formats). Omit a channel if it is unused.",
+        "A map found both as its own file and inside a packed file: its own file wins, for that map only.",
+        "glossiness (= Unity smoothness) is an inverted roughness. If an asset has both, roughness wins. mods = Unity HDRP Mask Map, ms = Unity URP / Standard Metallic map with smoothness in A.",
+        "asset_prefixes: removed from the START of asset names (file or subfolder). Longest first, one only. Leave [] to keep names unchanged."
+    ],
+
+    "extensions": [
+        ".png",
+        ".tga",
+        ".jpg",
+        ".jpeg",
+        ".tif",
+        ".tiff",
+        ".exr"
+    ],
+
+    "texture_formats": {
+        "base color":        ["_basecolor", "_albedo", "_bc", "_alb", "_d", "_diffuse"],
+        "normal":            ["_normal", "_nrm", "_n"],
+        "roughness":         ["_roughness", "_rough", "_r"],
+        "glossiness":        ["_glossiness", "_gloss", "_smoothness", "_smooth"],
+        "metallic":          ["_metallic", "_metalness", "_metal", "_m"],
+        "ambient occlusion": ["_ambientocclusion", "_occlusion", "_ao"],
+        "opacity":           ["_opacity", "_alpha"],
+        "height":            ["_height", "_displacement", "_disp", "_h"],
+        "emissive":          ["_emissive", "_emission", "_emit", "_e"]
+    },
+
+    "packed_formats": {
+        "orm": { "suffixes": ["_orm"], "R": "ambient occlusion", "G": "roughness", "B": "metallic" },
+        "rma": { "suffixes": ["_rma"], "R": "roughness", "G": "metallic", "B": "ambient occlusion" },
+        "mods": { "suffixes": ["_mods", "_maskmap"], "R": "metallic", "G": "ambient occlusion", "A": "glossiness" },
+        "ms": { "suffixes": ["_ms", "_metallicsmoothness"], "R": "metallic", "A": "glossiness" }
+    },
+
+    "asset_prefixes": ["tx_", "t_", "tex_", "sm_"]
+}
