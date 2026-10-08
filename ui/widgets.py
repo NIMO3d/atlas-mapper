@@ -14,11 +14,11 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 PLUGIN_NAME = "Atlas Mapper"
 # Shown in the "About" window (ui/about_dialog.py). Raise it at each release.
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.0.1"
 # Dark grey (#333333) version of the plugin icon, for the light title bar of
 # every window the plugin opens (the panel itself keeps the light icon).
 _WINDOW_ICON_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "resources", "atlas_mapper_icon_window.png")
+    os.path.dirname(os.path.dirname(__file__)), "resources", "atlas_mapper_icon_window.svg")
 
 # Painter UI colors, sampled from the native "Texture Set Settings" panel.
 _PAINTER_SEPARATOR = "#262626"

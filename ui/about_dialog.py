@@ -10,7 +10,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .widgets import PAINTER_ACCENT, PLUGIN_NAME, PLUGIN_VERSION, set_window_icon
 
 _ICON_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "resources", "atlas_mapper_icon.png")
+    os.path.dirname(os.path.dirname(__file__)), "resources", "atlas_mapper_icon.svg")
 
 _DESCRIPTION = "Non-destructive texture atlasing for Substance 3D Painter."
 _AUTHOR = "Nicolas Morlet"

@@ -53,7 +53,7 @@ _UDIM_NOTE = ("This project uses the UV Tile workflow (UDIMs): not supported by 
               "Please set up a new project with \"Use UV Tile workflow\" disabled.")
 
 _ICON_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "resources", "atlas_mapper_icon.png")
+    os.path.dirname(os.path.dirname(__file__)), "resources", "atlas_mapper_icon.svg")
 
 # Painter UI colors, sampled from the native "Texture Set Settings" panel.
 _PAINTER_BACKGROUND = "#333333"
