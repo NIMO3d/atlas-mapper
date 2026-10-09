@@ -36,6 +36,14 @@ _PRESET_TOOLTIP = ("Rules used by the scan to recognize the textures:\n"
                    "  • a prefix (TX_…) is removed from the asset name.\n"
                    "Create a preset with +, modify it with the pencil, delete it with -.")
 
+# "Rebuild all" check box, above "Build Atlas" (workflow.md §22.3).
+_REBUILD_ALL_TOOLTIP = (
+    "By default, the Build only rebuilds the assets whose choices changed since the last "
+    "Build (Atlas ID, files, packed channels, normal map format); the others are left as is.\n"
+    "Check this box to rebuild every asset: after undoing a Build (Ctrl+Z), or after editing "
+    "or deleting a generated [AM] element by mistake. Your own layers are never touched.\n"
+    "Unchecked again after each Build.")
+
 # Above "Build Atlas" while assets placed in the grid still have a warning.
 _BUILD_NOTE = "Please note: Fix the ⚠ of the assets that have an ID before \"Build Atlas\"."
 
@@ -106,19 +114,23 @@ def _grid_tooltip(size):
         f"Pixel-aligned grids: 2x2 and 4x4.")
 
 
-def _build_summary_text(placed, ignored, deleted=0, hidden=0, updated=0):
-    """'2 assets will be created · 2 updated · 1 without ID ignored · 1 folder deleted'.
+def _build_summary_text(placed, ignored, deleted=0, hidden=0, updated=0, unchanged=0):
+    """'2 assets will be created · 2 updated · 14 unchanged · 1 without ID ignored · 1 folder deleted'.
     updated: placed assets whose folder already exists (rebuilt, not created);
+    unchanged: placed assets left as is (same choices as at the last Build);
     deleted / hidden: folders of assets withdrawn from the Build
     (painter/layer_builder.py, folder_changes)."""
-    created = placed - updated
-    if created or not updated:
-        text = f"{created} {_plural(created, 'asset')} will be created"
-    if updated:
-        if created:
-            text += f" · {updated} updated"
-        else:  # nothing new: the line starts with the updated assets
-            text = f"{updated} {_plural(updated, 'asset')} will be updated"
+    created = placed - updated - unchanged
+    parts = []
+    if created or not (updated or unchanged):
+        parts.append(f"{created} {_plural(created, 'asset')} will be created")
+    if updated:  # first part: the line starts with the updated assets
+        parts.append(f"{updated} updated" if parts
+                     else f"{updated} {_plural(updated, 'asset')} will be updated")
+    if unchanged:
+        parts.append(f"{unchanged} unchanged" if parts
+                     else f"{unchanged} {_plural(unchanged, 'asset')} unchanged, nothing to rebuild")
+    text = " · ".join(parts)
     if ignored:
         text += f" · {ignored} without ID ignored"
     if deleted:
@@ -146,6 +158,8 @@ class AtlasMapperPanel(QtWidgets.QWidget):
     # Emitted with (old name, new name) when the artist renames a naming
     # preset in the editor (✎), before the rescan.
     preset_renamed = QtCore.Signal(str, str)
+    # Emitted when the artist checks / unchecks "Rebuild all".
+    rebuild_all_changed = QtCore.Signal()
 
     def __init__(self, list_presets, parent=None):
         """list_presets: function returning the naming preset names (the panel
@@ -224,6 +238,21 @@ class AtlasMapperPanel(QtWidgets.QWidget):
         self.build_summary.setWordWrap(True)  # longer with folders to remove: never widens the panel
         self.build_summary.setVisible(False)
         build_block.addWidget(self.build_summary)
+
+        # Shown once asset folders exist (a second Build): everything is
+        # rebuilt instead of the changed assets only. Explanation at the far
+        # right, like the settings lines.
+        self.rebuild_all_row = QtWidgets.QWidget()
+        rebuild_layout = QtWidgets.QHBoxLayout(self.rebuild_all_row)
+        rebuild_layout.setContentsMargins(0, 0, 0, 0)
+        self.rebuild_all_check = QtWidgets.QCheckBox("Rebuild all")
+        self._disable_focus_frame(self.rebuild_all_check)
+        self.rebuild_all_check.toggled.connect(lambda _checked: self.rebuild_all_changed.emit())
+        rebuild_layout.addWidget(self.rebuild_all_check)
+        rebuild_layout.addStretch(1)
+        rebuild_layout.addWidget(InfoIcon(_REBUILD_ALL_TOOLTIP))
+        self.rebuild_all_row.setVisible(False)
+        build_block.addWidget(self.rebuild_all_row)
 
         self.build_button = QtWidgets.QPushButton("Build Atlas")
         self.build_button.setStyleSheet(_NEXT_STEP_STYLE)
@@ -353,8 +382,9 @@ class AtlasMapperPanel(QtWidgets.QWidget):
                 self.grid_combo.count() - 1, _grid_tooltip(size) or None, QtCore.Qt.ToolTipRole)
         self.grid_combo.setCurrentIndex(GRID_SIZES.index(DEFAULT_GRID_SIZE))
         self._disable_focus_frame(self.grid_combo)  # no blue current entry after use
-        # A previous scan was made for another grid: it is redone automatically.
-        self.grid_combo.currentIndexChanged.connect(self._on_scan_setting_changed)
+        # A grid other than the one suggested by the mesh UVs is confirmed
+        # first; a previous scan made for another grid is redone automatically.
+        self.grid_combo.currentIndexChanged.connect(self._on_grid_changed)
         # The warning also shows on the closed list while 3x3 is chosen.
         self.grid_combo.currentIndexChanged.connect(
             lambda _index: self.grid_combo.setToolTip(_grid_tooltip(self.grid_size())))
@@ -455,6 +485,10 @@ class AtlasMapperPanel(QtWidgets.QWidget):
         while layout.count():
             item = layout.takeAt(0)
             if item.widget() is not None:
+                # Hidden at once: it is only deleted when Painter is idle, and
+                # the scan progress window redraws the panel before that (the
+                # old report was drawn over "Scan folder").
+                item.widget().hide()
                 item.widget().deleteLater()
 
     # ------------------------------------------------------------------
@@ -468,6 +502,40 @@ class AtlasMapperPanel(QtWidgets.QWidget):
     def grid_size(self):
         """Selected grid size N (the atlas is N x N)."""
         return self.grid_combo.currentData()
+
+    def set_grid_size(self, grid_size):
+        """Select a grid by the plugin (project opened, grid suggested by the
+        mesh): no confirmation. Like a change by the artist, a scan shown is
+        cleared, and redone with the new grid."""
+        self._setting_grid = True
+        try:
+            self.grid_combo.setCurrentIndex(GRID_SIZES.index(grid_size))
+        finally:
+            self._setting_grid = False
+
+    def set_suggested_grid(self, grid_size):
+        """Grid suggested by the mesh UVs of the project (workflow.md §12.2), or
+        None (no mesh read, no grid fits): the artist confirms another grid."""
+        self._suggested_grid = grid_size
+
+    def confirm_remembered_grid(self, remembered, suggested):
+        """The last Build used another grid than the mesh UVs suggest (atlas
+        reorganized in the DCC?). Returns the grid to use."""
+        box = message_box(self, f"The imported mesh suggests a {suggested}x{suggested} grid",
+                          warning=True)
+        box.setInformativeText(
+            f"The last Build of this Texture Set used a {remembered}x{remembered} grid, "
+            f"but the UVs of each mesh lie in one cell of a {suggested}x{suggested} grid: "
+            f"the atlas may have been reorganized since.\n\n"
+            f"With {suggested}x{suggested}, the Atlas IDs of the last Build are not restored "
+            f"(an ID is another cell in another grid).")
+        keep_button = box.addButton(f"Keep {remembered}x{remembered}",
+                                    QtWidgets.QMessageBox.RejectRole)
+        use_button = box.addButton(f"Use {suggested}x{suggested}",
+                                   QtWidgets.QMessageBox.AcceptRole)
+        box.setDefaultButton(keep_button)
+        box.exec()
+        return suggested if box.clickedButton() is use_button else remembered
 
     def preset_name(self):
         """Selected naming preset, or "" when there is none."""
@@ -500,7 +568,7 @@ class AtlasMapperPanel(QtWidgets.QWidget):
         last Build of the opened project). Like a manual change, it clears a
         previous scan. A missing preset keeps the current one."""
         if grid_size in GRID_SIZES:  # None / unknown: keep the current grid
-            self.grid_combo.setCurrentIndex(GRID_SIZES.index(grid_size))
+            self.set_grid_size(grid_size)
         if preset_name:
             self.select_preset(preset_name)
         self.root_folder_field.set_path(root_folder)
@@ -518,7 +586,8 @@ class AtlasMapperPanel(QtWidgets.QWidget):
         self._clear_layout(self.mapping_layout)
         self._scanned = False
         self._build_ready = False
-        self._build_counts = (0, 0, 0, 0, 0)
+        self._build_counts = (0, 0, 0, 0, 0, 0)
+        self.set_rebuild_all(False)  # belongs to the scan shown
         self._update_buttons()
 
     def set_scan_report(self, widget, succeeded=True):
@@ -538,19 +607,52 @@ class AtlasMapperPanel(QtWidgets.QWidget):
         self.mapping_layout.addWidget(widget, 1)  # takes the height: its list scrolls
 
     def set_build_ready(self, ready, placed=0, ignored=0, deleted=0, hidden=0, updated=0,
-                        texture_set=""):
+                        unchanged=0, texture_set=""):
         """Enable "Build Atlas" (decided by AtlasAssignment.can_build).
 
-        placed / ignored: assets with / without an Atlas ID; updated: placed
-        assets whose folder already exists; deleted / hidden: folders of
+        placed / ignored: assets with / without an Atlas ID; updated / unchanged:
+        placed assets whose folder already exists, rebuilt / left as is;
+        deleted / hidden: folders of
         withdrawn assets; texture_set: where the Build goes (the active one).
         When the build is possible, a line above the button says where, and
         what will be created, updated and removed.
         """
         self._build_ready = ready
-        self._build_counts = (placed, ignored, deleted, hidden, updated)
+        self._build_counts = (placed, ignored, deleted, hidden, updated, unchanged)
         self._build_target = texture_set
         self._update_buttons()
+
+    def rebuild_all(self):
+        """True: the Build rebuilds every asset, even the unchanged ones."""
+        return self.rebuild_all_check.isChecked()
+
+    def set_rebuild_all(self, checked):
+        """Check / uncheck "Rebuild all" (no rebuild_all_changed signal)."""
+        self.rebuild_all_check.blockSignals(True)
+        self.rebuild_all_check.setChecked(checked)
+        self.rebuild_all_check.blockSignals(False)
+
+    def confirm_project_normal_format(self):
+        """First scan of a Texture Set never built: which normal map format
+        was chosen when the Painter project was created? Returns "opengl",
+        "directx", or None (Cancel: no scan)."""
+        current = NORMAL_LABELS[self.project_normal_format()]
+        box = message_box(self, "Project normal map format", warning=True)
+        box.setInformativeText(
+            f"Atlas Mapper is set to {current}.\n\n"
+            f"Which normal map format was chosen when this Painter project was created "
+            f"(Edit > Project configuration)? Atlas Mapper cannot read it, and a wrong one "
+            f"inverts the relief of every normal map at Build.\n\n"
+            f"Asked once per Texture Set: the answer is kept with the Build.")
+        buttons = {}
+        for normal_format in NORMAL_FORMATS:
+            buttons[normal_format] = box.addButton(NORMAL_LABELS[normal_format],
+                                                   QtWidgets.QMessageBox.AcceptRole)
+        # Enter cancels: a reflex press must not confirm the wrong format.
+        box.setDefaultButton(box.addButton("Cancel", QtWidgets.QMessageBox.RejectRole))
+        box.exec()
+        return next((fmt for fmt, button in buttons.items()
+                     if box.clickedButton() is button), None)
 
     def confirm_build_target(self, scanned, active):
         """The active Texture Set changed since the scan: build into the
@@ -578,8 +680,14 @@ class AtlasMapperPanel(QtWidgets.QWidget):
 
     _scanned = False
     _build_ready = False
-    # (assets with an ID, assets without ID, folders to delete, folders to hide)
-    _build_counts = (0, 0, 0, 0, 0)
+    # Grid suggested by the mesh UVs (None: unknown); grid set by the plugin
+    # (no confirmation); last grid applied (a return to it does not rescan).
+    _suggested_grid = None
+    _setting_grid = False
+    _previous_grid = DEFAULT_GRID_SIZE
+    # (assets with an ID, assets without ID, folders to delete, folders to hide,
+    #  assets to update, assets unchanged)
+    _build_counts = (0, 0, 0, 0, 0, 0)
     _build_target = ""  # Texture Set the Build goes into
 
     @staticmethod
@@ -608,6 +716,9 @@ class AtlasMapperPanel(QtWidgets.QWidget):
         if self._build_target:  # where the Build goes: a project can hold several atlases
             summary = f"Texture Set \"{self._build_target}\" · {summary}"
         self.build_summary.setText(summary)
+        # Only when asset folders exist: on a first Build everything is new.
+        existing = self._build_counts[4] + self._build_counts[5]
+        self.rebuild_all_row.setVisible(self._build_ready and existing > 0)
         placed = self._build_counts[0]
         self.build_note.setVisible(not self._build_ready and placed > 0)
         self.source_hint.setVisible(not self._scanned)
@@ -628,6 +739,33 @@ class AtlasMapperPanel(QtWidgets.QWidget):
     def _on_clear_path_clicked(self):
         # path_changed too: the previous scan is removed.
         self.root_folder_field.set_path("")
+
+    def _on_grid_changed(self, _index):
+        """Grid chosen by the artist other than the one suggested by the mesh
+        UVs: confirmed first, or back to the suggested one. Then a scan shown
+        is redone with the new grid."""
+        size = self.grid_size()
+        if (not self._setting_grid and self._suggested_grid is not None
+                and size != self._suggested_grid and not self._confirm_grid(size)):
+            self.set_grid_size(self._suggested_grid)  # this call rescans if needed
+            return
+        if size != self._previous_grid:
+            self._previous_grid = size
+            self._on_scan_setting_changed()
+
+    def _confirm_grid(self, size):
+        """True: keep the grid chosen by the artist."""
+        suggested = self._suggested_grid
+        box = message_box(self, f"The imported mesh suggests a {suggested}x{suggested} grid",
+                          warning=True)
+        box.setInformativeText(
+            f"The UVs of each mesh lie in one cell of a {suggested}x{suggested} grid. "
+            f"With {size}x{size}, the Atlas IDs will not match the UV layout of the mesh.")
+        use_button = box.addButton(f"Use {size}x{size}", QtWidgets.QMessageBox.AcceptRole)
+        box.setDefaultButton(box.addButton(f"Keep {suggested}x{suggested}",
+                                           QtWidgets.QMessageBox.RejectRole))
+        box.exec()
+        return box.clickedButton() is use_button
 
     def _on_scan_setting_changed(self):
         # The scan shown was made for the old grid (IDs depend on the grid) or

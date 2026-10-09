@@ -10,12 +10,19 @@ artist's choices.
                 clicking a cell selects the asset placed in it and scrolls the
                 list to center its line; an empty cell has no hand cursor and
                 explains at once, on hover, how to fill it;
-    note        choices restored from the last Build, if any;
+                with "Frame viewport on click", a click also asks to frame the
+                cell's meshes (cell_framing_requested), even in an empty cell,
+                and a new click on a cell with several meshes goes to the next
+                one without deselecting (workflow.md §11.1);
+    framing     "Frame viewport on click" check box, under "Grid NxN", left of the grid;
+    note        choices restored from the last Build, if any, and the number of
+                Atlas IDs pre-filled from the mesh names and UVs (workflow.md §12.1);
     normal      default normal format of the source files; an asset can have its
                 own ("Source format" in its details), then shown after its name;
                 the Painter project format is in CONFIGURATION (main_panel.py);
     asset list  (the only part that scrolls) one line per asset: fold arrow, name,
-                status, Atlas ID drop-down;
+                status, Atlas ID drop-down; "Pre-filled" after the name while its
+                ID comes from the pre-fill and the artist has not changed it;
                 an asset without ID is greyed: it is not created at Build;
                 the arrow (or a click on the line) unfolds its map details, where
                 the source normal format can be changed for this asset only.
@@ -30,7 +37,7 @@ from PySide6 import QtCore, QtWidgets
 
 from ..core.atlas_assignment import (
     GLOSSINESS_TEXTURE_FORMAT, NORMAL_DIRECTX, NORMAL_FORMATS, NORMAL_OPENGL, NORMAL_TEXTURE_FORMAT,
-    STATUS_EMPTY, STATUS_NO_ID, STATUS_READY, STATUS_WARNING, cell_row_column)
+    NORMAL_UNCERTAIN, STATUS_EMPTY, STATUS_NO_ID, STATUS_READY, STATUS_WARNING, cell_row_column)
 from .widgets import (
     SHORT_FIELD_WIDTH, ChevronButton, ComboBox, InfoIcon, wrap_tooltip)
 
@@ -41,7 +48,7 @@ _NO_ID_TEXT = "—"
 
 NORMAL_LABELS = {NORMAL_OPENGL: "OpenGL", NORMAL_DIRECTX: "DirectX"}
 _SOURCE_TOOLTIP = ("Format of the SOURCE normal map (the file).\n"
-                   "If it differs from the project, the Green channel is inverted at Build\n"
+                   "If it differs from the project, the Green channel is inverted at Build "
                    "(Levels effect under the asset's Fill).")
 _DEFAULT_NORMAL_TOOLTIP = (
     "Format (OpenGL / DirectX) of the imported normal maps, used by every asset "
@@ -50,6 +57,25 @@ _DEFAULT_NORMAL_TOOLTIP = (
     "under its Normal line. Its format is then shown after its name.")
 # Format shown after the name of an asset that differs from the default.
 _NORMAL_BADGE_STYLE = "color: #a0a0a0;"
+# On the asset line, the format and "Pre-filled" get lighter under the mouse:
+# they have a tooltip (2026-10-09).
+_BADGE_HOVER_STYLE = "QLabel {{ color: #a0a0a0; {extra} }} QLabel:hover {{ color: #e5e5e5; }}"
+_NORMAL_BADGE_TOOLTIP = "Normal format of this asset only (\"Source format\")."
+# Between the format and "Pre-filled" when both show.
+_BADGE_SEPARATOR = "|"
+# Atlas ID pre-filled from the mesh names and UVs (workflow.md §12.1), shown
+# after the name until the artist changes that ID.
+_PREFILL_TEXT = "Pre-filled"
+_PREFILL_TOOLTIP = ("ID {atlas_id} pre-filled from the mesh {meshes}: its name matches this "
+                    "asset and its UVs lie in cell {atlas_id}.\nCheck it, or choose another ID.")
+_PREFILL_NOTE = "{count} Atlas ID{s} pre-filled from the mesh names and UVs: check them before the Build."
+# Under "Source format": what the scan read in the normal map (workflow.md §20.1.1).
+_DETECTED_TEXTS = {NORMAL_OPENGL: "Detected: OpenGL", NORMAL_DIRECTX: "Detected: DirectX",
+                   NORMAL_UNCERTAIN: "Detected: uncertain, check visually"}
+_DETECTED_TOOLTIP = (
+    "Read from the pixels of the normal map at scan. A sure result fills \"Source format\" "
+    "for a new asset; an asset already built keeps your choice.\n"
+    "Mirrored or overlapping UV islands make the result uncertain.")
 _CHOOSE_TEXT = "Choose…"
 _CELL_SIZE = 32     # pixels: the Atlas ID only (status shown by its color)
 _CELL_SPACING = 2
@@ -119,6 +145,21 @@ _UNUSED_TOOLTIP = "No ID: this asset will not be created."
 # Shown at once when the mouse enters an empty cell.
 _EMPTY_CELL_TOOLTIP = ("Empty cell. To fill it, choose ID {atlas_id} in the ID list of an asset. "
                        "It can also stay unused.")
+# Viewport framing (workflow.md §11.1): an empty cell whose UVs hold a mesh.
+_EMPTY_FRAMED_CELL_TOOLTIP = ("Empty cell. Click to frame its mesh in the viewport ({meshes}). "
+                              "To fill it, choose ID {atlas_id} in the ID list of an asset.")
+_NEXT_MESH_TOOLTIP = "{count} meshes in this cell: click it again to frame the next one."
+_FRAME_VIEWPORT_TEXT = "Frame viewport on click"
+_FRAME_VIEWPORT_TOOLTIP = (
+    "Click a cell to frame, in the viewport, the mesh whose UVs lie in it.\n"
+    "Several meshes in a cell: click again for the next one.\n\n"
+    "To turn around the asset, put the cursor on it before Alt + Left.\n\n"
+    "Binary FBX or OBJ meshes. Only the camera moves.")
+# Between the "Frame viewport on click" text and its "i" icon.
+_CHECK_INFO_GAP = 8
+# Between "Grid NxN" and "Frame viewport on click", left of the grid.
+_GRID_COLUMN_SPACING = 8
+_MESH_SEPARATOR = " · "
 # Vertical gap between two asset lines, kept small like Painter's foldable
 # groups (Display Settings): the hover background tells the lines apart.
 _ASSET_LINE_SPACING = 2
@@ -178,6 +219,14 @@ def _panel_combo():
     combo = ComboBox()
     combo.setFocusPolicy(QtCore.Qt.NoFocus)
     return combo
+
+
+def _sub_title(text):
+    """"Grid NxN" and "Asset list": bold, so the two parts of MAPPING stand
+    apart (decided 2026-10-09)."""
+    label = QtWidgets.QLabel(text)
+    label.setStyleSheet("font-weight: bold;")
+    return label
 
 
 def _set_style(widget, style):
@@ -293,10 +342,20 @@ class _ClickableRow(QtWidgets.QWidget):
 class MappingWidget(QtWidgets.QWidget):
     """Grid + asset list for one AtlasAssignment."""
 
-    # Emitted after the artist changes an Atlas ID.
+    # Emitted after the artist changes an Atlas ID, a file or a normal map
+    # format: the line above "Build Atlas" is recomputed.
     assignment_changed = QtCore.Signal()
+    # Emitted with (Atlas ID, clicked again) when a click on a cell must frame
+    # the viewport on its meshes; clicked again = go to the next mesh.
+    cell_framing_requested = QtCore.Signal(int, bool)
+    # Emitted with the new state when the artist checks / unchecks
+    # "Frame viewport on click" (under the grid).
+    frame_viewport_changed = QtCore.Signal(bool)
 
-    def __init__(self, assignment, format_order, restore_report=None, parent=None):
+    def __init__(self, assignment, format_order, restore_report=None, frame_viewport=True,
+                 parent=None):
+        """frame_viewport: initial state of "Frame viewport on click" (kept by
+        the plugin between scans and Painter sessions)."""
         super().__init__(parent)
         self.assignment = assignment
         self._format_order = format_order  # map order of the naming preset (packed excluded)
@@ -310,27 +369,41 @@ class MappingWidget(QtWidgets.QWidget):
         self._scroll = None                # scroll area of the asset list
         self._normal_badges = {}           # id(asset) -> label of its own normal format
         self._issue_labels = {}            # id(asset) -> _IssuesLabel next to its ⚠
+        self._prefill_labels = {}          # id(asset) -> "Pre-filled" label
+        self._badge_separators = {}        # id(asset) -> "|" between format and "Pre-filled"
+        # Viewport framing: {Atlas ID: [mesh names of each target]}, and the
+        # cell framed by the last click (set_framing_targets).
+        self._framing = {}
+        self._framing_on = False
+        self._framed_cell = None
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
-        layout.addWidget(self._build_grid_row())
-        # Under the grid: the IDs it talks about are the ones of the grid.
+        layout.addWidget(self._build_grid_row(frame_viewport))
+        # Title of the list, outside the scroll: it always stays visible.
+        layout.addWidget(_sub_title("Asset list"))
+        # Under "Asset list", shifted one step right: what was restored from
+        # the last Build, the default normal format (both concern the listed
+        # assets), then the list itself. The grid above never moves.
+        assets_block = QtWidgets.QVBoxLayout()
+        assets_block.setContentsMargins(_SUB_INDENT, 0, 0, 0)
+        assets_block.setSpacing(layout.spacing())
+        layout.addLayout(assets_block, 1)
         note = _restore_note(restore_report)
         if note:
             note_label = QtWidgets.QLabel(note)
             note_label.setTextFormat(QtCore.Qt.RichText)  # orange ⚠ lines
             note_label.setWordWrap(True)
             note_label.setStyleSheet("font-style: italic;")  # a status, not a setting
-            layout.addWidget(note_label)
-        # Title of the list, outside the scroll: it always stays visible.
-        layout.addWidget(QtWidgets.QLabel("Asset list"))
-        # Under "Asset list", shifted one step right: the default normal
-        # format (it concerns the listed assets), then the list itself.
-        assets_block = QtWidgets.QVBoxLayout()
-        assets_block.setContentsMargins(_SUB_INDENT, 0, 0, 0)
-        assets_block.setSpacing(layout.spacing())
-        layout.addLayout(assets_block, 1)
+            assets_block.addWidget(note_label)
+        prefilled = sum(1 for asset in assignment.assets if assignment.prefill(asset))
+        if prefilled:
+            prefill_label = QtWidgets.QLabel(
+                _PREFILL_NOTE.format(count=prefilled, s="s" if prefilled > 1 else ""))
+            prefill_label.setWordWrap(True)
+            prefill_label.setStyleSheet("font-style: italic;")  # a status, like the note above
+            assets_block.addWidget(prefill_label)
         assets_block.addWidget(self._build_normal_rows())
 
         # Only the asset list scrolls: the grid above always stays visible.
@@ -362,25 +435,28 @@ class MappingWidget(QtWidgets.QWidget):
     # Construction
     # ------------------------------------------------------------------
 
-    def _build_grid_row(self):
-        """'Grille NxN' on the left, the grid centered in the width of the
-        section."""
+    def _build_grid_row(self, frame_viewport):
+        """'Grid NxN' on the left with "Frame viewport on click" under it (both
+        belong to the grid, decided 2026-10-08), the grid centered in the
+        width left on their right. Until then the grid was centered in the
+        whole width, with an empty space as wide as the label on its right:
+        the check box line is too wide for that."""
         row = QtWidgets.QWidget()
         row_layout = QtWidgets.QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
+        column = QtWidgets.QVBoxLayout()
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(_GRID_COLUMN_SPACING)
         # Follows the grid chosen in CONFIGURATION (a new grid rebuilds this widget).
         size = self.assignment.grid_size
-        label = QtWidgets.QLabel(f"Grid {size}x{size}")
         # Top of the label level with the top of the first row of cells.
-        row_layout.addWidget(label, 0, QtCore.Qt.AlignTop)
+        column.addWidget(_sub_title(f"Grid {size}x{size}"))
+        column.addWidget(self._build_framing_row(frame_viewport))
+        column.addStretch(1)
+        row_layout.addLayout(column)
         row_layout.addStretch(1)
         row_layout.addWidget(self._build_grid())
         row_layout.addStretch(1)
-        # Empty space as wide as the label on the right: the grid is centered
-        # in the whole width, not only in the space left by the label.
-        balance = QtWidgets.QWidget()
-        balance.setFixedWidth(label.sizeHint().width())
-        row_layout.addWidget(balance)
         return row
 
     def _build_grid(self):
@@ -396,6 +472,24 @@ class MappingWidget(QtWidgets.QWidget):
             grid.addWidget(cell, row, column)
             self._cells[atlas_id] = cell
         return grid_widget
+
+    def _build_framing_row(self, checked):
+        """Check box before its text, like Painter's check boxes, then the
+        "i" icon right after the text. Navigation only, never used by the
+        Build (workflow.md §11.1)."""
+        row = QtWidgets.QWidget()
+        row_layout = QtWidgets.QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(0)
+        check = QtWidgets.QCheckBox(_FRAME_VIEWPORT_TEXT)
+        check.setChecked(checked)
+        check.setFocusPolicy(QtCore.Qt.NoFocus)  # no blue focus frame after a click
+        check.toggled.connect(self.frame_viewport_changed.emit)
+        row_layout.addWidget(check)
+        row_layout.addSpacing(_CHECK_INFO_GAP)
+        row_layout.addWidget(InfoIcon(_FRAME_VIEWPORT_TOOLTIP))
+        row_layout.addStretch(1)
+        return row
 
     def _build_normal_rows(self):
         """Default source format of the assets (the project format is in
@@ -442,21 +536,34 @@ class MappingWidget(QtWidgets.QWidget):
         name.setStyleSheet(_NAME_STYLE)
         line_layout.addWidget(name)
 
-        # Status icon, normal badge and warning text: grouped, with a small
-        # gap, so the text reads as the explanation of its ⚠.
+        # Normal badge, "Pre-filled", status icon and warning text: grouped,
+        # with a small gap. The badges come first so the ⚠ stays right
+        # before its text, which reads as its explanation (2026-10-09).
         status_group = QtWidgets.QHBoxLayout()
         status_group.setSpacing(_WARNING_TEXT_GAP)
         line_layout.addLayout(status_group, 1)
-        status = QtWidgets.QLabel()
-        status_group.addWidget(status)
         # "DirectX" / "OpenGL" when this asset differs from the default format
         # (hidden when empty: no extra gap).
         badge = QtWidgets.QLabel()
-        badge.setStyleSheet(_NORMAL_BADGE_STYLE)
-        badge.setToolTip("Normal format of this asset only (\"Source format\").")
+        badge.setStyleSheet(_BADGE_HOVER_STYLE.format(extra=""))
+        badge.setToolTip(wrap_tooltip(_NORMAL_BADGE_TOOLTIP))
         badge.setVisible(False)
         status_group.addWidget(badge)
         self._normal_badges[id(asset)] = badge
+        # "|" between the format and "Pre-filled", only when both show.
+        separator = QtWidgets.QLabel(_BADGE_SEPARATOR)
+        separator.setStyleSheet(_NORMAL_BADGE_STYLE)
+        separator.setVisible(False)
+        status_group.addWidget(separator)
+        self._badge_separators[id(asset)] = separator
+        # "Pre-filled" while the ID comes from the mesh names and UVs.
+        prefill = QtWidgets.QLabel(_PREFILL_TEXT)
+        prefill.setStyleSheet(_BADGE_HOVER_STYLE.format(extra="font-style: italic;"))
+        prefill.setVisible(False)
+        status_group.addWidget(prefill)
+        self._prefill_labels[id(asset)] = prefill
+        status = QtWidgets.QLabel()
+        status_group.addWidget(status)
         # What the ⚠ means, readable without unfolding; takes the free room
         # up to "ID" (empty: just a gap), cut with "…" when too long.
         issues = _IssuesLabel()
@@ -509,8 +616,8 @@ class MappingWidget(QtWidgets.QWidget):
                 label = QtWidgets.QLabel(f"{html.escape(texture_format.title())}{gap}✓{gap}"
                                          f"<i>replaced by Roughness</i>")
                 label.setTextFormat(QtCore.Qt.RichText)
-                label.setToolTip("This asset has a Roughness and a Glossiness: the Roughness "
-                                 "is used, the Glossiness is ignored.")
+                label.setToolTip(wrap_tooltip("This asset has a Roughness and a Glossiness: "
+                                              "the Roughness is used, the Glossiness is ignored."))
                 layout.addWidget(_hoverable(label))
             elif source is not None and source.channel is not None:
                 # Map read from one channel of a packed file.
@@ -562,7 +669,7 @@ class MappingWidget(QtWidgets.QWidget):
         row_layout.setContentsMargins(_DETAIL_INDENT, 0, 0, 0)
         row_layout.addWidget(QtWidgets.QLabel("Source format"))
         combo = _panel_combo()
-        combo.setToolTip(_SOURCE_TOOLTIP)
+        combo.setToolTip(wrap_tooltip(_SOURCE_TOOLTIP))
         default_label = NORMAL_LABELS[self.assignment.default_normal_format]
         # "" = follow the default (None as item data is not reliable with findData).
         combo.addItem(f"Default ({default_label})", "")
@@ -572,6 +679,12 @@ class MappingWidget(QtWidgets.QWidget):
         combo.currentIndexChanged.connect(
             lambda _index: self._on_normal_override_chosen(asset, combo.currentData() or None))
         row_layout.addWidget(combo)
+        detected = self.assignment.detected_normal_format(asset)
+        if detected is not None:
+            label = QtWidgets.QLabel(_DETECTED_TEXTS[detected])
+            label.setStyleSheet(_NORMAL_BADGE_STYLE)
+            label.setToolTip(wrap_tooltip(_DETECTED_TOOLTIP))
+            row_layout.addWidget(label)
         row_layout.addStretch(1)
         return row
 
@@ -612,9 +725,14 @@ class MappingWidget(QtWidgets.QWidget):
         for atlas_id, cell in self._cells.items():
             cell.setText(str(atlas_id))  # status shown by the color (_CELL_COLORS)
             assets = self.assignment.assets_at(atlas_id)
-            cell.setToolTip(", ".join(a.name for a in assets))  # empty: _on_cell_hovered
-            # A hand promises a click: only on a cell that has an asset to select.
-            cell.setCursor(QtCore.Qt.PointingHandCursor if assets else QtCore.Qt.ArrowCursor)
+            targets = self._framing.get(atlas_id, [])
+            tooltip = ", ".join(a.name for a in assets)  # empty: _on_cell_hovered
+            if assets and len(targets) > 1:
+                tooltip += "\n" + _NEXT_MESH_TOOLTIP.format(count=len(targets))
+            cell.setToolTip(wrap_tooltip(tooltip))
+            # A hand promises a click: an asset to select, or a mesh to frame.
+            cell.setCursor(QtCore.Qt.PointingHandCursor if assets or targets
+                           else QtCore.Qt.ArrowCursor)
 
         for asset, line, status, name, details, arrow in self._rows:
             status.setText(STATUS_ICONS[self.assignment.asset_status(asset)])
@@ -624,16 +742,26 @@ class MappingWidget(QtWidgets.QWidget):
             _set_style(name, _NAME_STYLE + color)
             # One tooltip for the whole line: "No ID..." then the details of
             # the warnings, separated by a blank line.
-            issues = self.assignment.asset_issues(asset)
+            # Notices (normal format to check) read like the warnings but never
+            # block the Build: the status icon stays ✓.
+            issues = (self.assignment.asset_issues(asset)
+                      + self.assignment.asset_notices(asset))
             tooltip_blocks = [_UNUSED_TOOLTIP] if unused else []
             if issues:
                 tooltip_blocks.append("\n".join(issue.detail for issue in issues))
-            line.setToolTip("\n\n".join(tooltip_blocks))
+            line.setToolTip(wrap_tooltip("\n\n".join(tooltip_blocks)))
             override = self.assignment.normal_format_override(asset)
             differs = override is not None and override != self.assignment.default_normal_format
             badge = self._normal_badges[id(asset)]
             badge.setText(NORMAL_LABELS[override] if differs else "")
             badge.setVisible(differs)
+            prefill = self.assignment.prefill(asset)
+            prefill_label = self._prefill_labels[id(asset)]
+            prefill_label.setVisible(prefill is not None)
+            self._badge_separators[id(asset)].setVisible(differs and prefill is not None)
+            if prefill is not None:
+                prefill_label.setToolTip(wrap_tooltip(_PREFILL_TOOLTIP.format(
+                    atlas_id=prefill.atlas_id, meshes=" + ".join(prefill.mesh_names))))
             self._issue_labels[id(asset)].set_issues(issues)
             expanded = id(asset) in self._expanded
             arrow.setChecked(expanded)
@@ -678,9 +806,17 @@ class MappingWidget(QtWidgets.QWidget):
             # Empty cell: how to fill it, at once (a Qt tooltip waits ~0.7 s),
             # just below the cell; hidden as soon as the mouse leaves it.
             cell = self._cells[atlas_id]
+            targets = self._framing.get(atlas_id, [])
+            if targets:
+                text = _EMPTY_FRAMED_CELL_TOOLTIP.format(
+                    atlas_id=atlas_id, meshes=_MESH_SEPARATOR.join(targets))
+                if len(targets) > 1:
+                    text += " " + _NEXT_MESH_TOOLTIP.format(count=len(targets))
+            else:
+                text = _EMPTY_CELL_TOOLTIP.format(atlas_id=atlas_id)
             QtWidgets.QToolTip.showText(
                 cell.mapToGlobal(cell.rect().bottomLeft() + QtCore.QPoint(0, 4)),
-                wrap_tooltip(_EMPTY_CELL_TOOLTIP.format(atlas_id=atlas_id)), cell, cell.rect())
+                wrap_tooltip(text), cell, cell.rect())
 
     # ------------------------------------------------------------------
     # Artist actions
@@ -701,13 +837,45 @@ class MappingWidget(QtWidgets.QWidget):
         else:
             self._expanded.add(id(asset))
         self._selected = asset
+        self._framed_cell = None  # selected from the list: the next cell click starts over
         self._refresh()
 
     def _on_cell_clicked(self, atlas_id):
         assets = self.assignment.assets_at(atlas_id)
-        self._select(assets[0] if assets else None, toggle=True)
-        if self._selected is not None:
-            self._center_on(self._selected)
+        targets = self._framing.get(atlas_id, [])
+        # Clicked again: next mesh of the cell (workflow.md §11.1).
+        again = atlas_id == self._framed_cell
+        deselected = False
+        if assets:
+            # A cell with several meshes stays selected while the artist
+            # goes from one mesh to the next; otherwise a second click deselects.
+            self._select(assets[0], toggle=not (again and len(targets) > 1))
+            deselected = self._selected is None
+            if not deselected:
+                self._center_on(self._selected)
+        # An asset cell is sent even without a known mesh: the plugin then
+        # explains why framing is not possible (mesh file missing, not FBX / OBJ...).
+        # While no mesh at all is known (after such an error), every cell is
+        # sent: the plugin reads the mesh file again once it is back or
+        # reimported (Painter sends no event for a reimport).
+        if (self._framing_on and (targets or assets or not self._framing)
+                and not deselected):
+            self._framed_cell = atlas_id
+            self.cell_framing_requested.emit(atlas_id, again)
+        else:
+            self._framed_cell = None
+
+    def set_framing_targets(self, targets, enabled=True):
+        """{Atlas ID: [mesh names of each target]} that a click frames in the
+        viewport. enabled False: "Frame viewport on click" is off, the grid
+        behaves as without framing."""
+        targets = dict(targets) if enabled else {}
+        if targets == self._framing and enabled == self._framing_on:
+            return   # unchanged: the mesh being framed by repeated clicks is kept
+        self._framing = targets
+        self._framing_on = enabled
+        self._framed_cell = None
+        self._refresh()
 
     def _center_on(self, asset):
         """Scroll the asset list so the line of this asset is in the middle
@@ -721,17 +889,20 @@ class MappingWidget(QtWidgets.QWidget):
     def _on_id_chosen(self, asset, atlas_id):
         self.assignment.set_atlas_id(asset, atlas_id)
         self._selected = asset  # shows where it landed in the grid, without unfolding
+        self._framed_cell = None
         self._refresh()
         self.assignment_changed.emit()
 
     def _on_default_normal_chosen(self, normal_format):
         self.assignment.set_default_normal_format(normal_format)
         self._refresh()  # the open details show "Default (...)"
+        self.assignment_changed.emit()
 
     def _on_normal_override_chosen(self, asset, normal_format):
         """'Source format' of one asset: None = follow the default format."""
         self.assignment.set_normal_format_override(asset, normal_format)
         self._refresh()  # its format appears / disappears after its name
+        self.assignment_changed.emit()
 
     def _on_file_chosen(self, asset, texture_format, texture):
         self.assignment.set_chosen_texture(asset, texture_format, texture)

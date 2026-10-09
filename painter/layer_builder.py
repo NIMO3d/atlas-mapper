@@ -13,7 +13,9 @@ Only module that modifies the Painter project. It receives validated data
 
 First and second Build follow the same path (docs/project/workflow.md §22.2):
 every generated element is looked up by its name, created if missing, then
-set to the validated values. Everything else (the artist's layers and
+set to the validated values. An asset unchanged since the last Build (same
+fingerprint, folder still there with the same ID) is skipped, unless the
+artist asks to rebuild everything (§22.3). Everything else (the artist's layers and
 effects, folders of assets not built this time) is left as is. Painter's
 Python API cannot move a layer: an existing folder keeps its place.
 
@@ -87,12 +89,25 @@ class BuildReport:
     texture_set: str = ""
     created: list = field(default_factory=list)    # folder names, new this Build
     updated: list = field(default_factory=list)    # folder names, already there
+    unchanged: list = field(default_factory=list)  # folder names, left as is (§22.3)
+    # Asset names (lower case) whose folder is up to date after this Build:
+    # built or left unchanged. Their fingerprints go into the Build memory.
+    up_to_date: set = field(default_factory=set)
     # Readable sentences for the artist; **text** = bold in the Build window.
     notes: list = field(default_factory=list)
 
 
-def build_atlas(grid_size, assets):
-    """Create or update the Layer Stack for the validated assets. Raises BuildError."""
+def build_atlas(grid_size, assets, unchanged=frozenset(), progress=None):
+    """Create or update the Layer Stack for the validated assets. Raises BuildError.
+    unchanged: asset names (lower case) whose folder can be left as is
+    (core/build_memory.unchanged_assets); empty = rebuild everything.
+    progress(done, total, asset name), optional: called before each Painter
+    call, so a progress window can show the Build is working
+    (ui/build_progress.py)."""
+    def report_progress(done=0, asset_name=""):
+        if progress is not None:
+            progress(done, len(assets), asset_name)
+
     if not substance_painter.project.is_open():
         raise BuildError("No project is open in Painter.\n"
                          "Open the project holding the atlas mesh, then run the Build again.")
@@ -103,6 +118,7 @@ def build_atlas(grid_size, assets):
                          "Select the Texture Set of the atlas, then run the Build again.") from error
 
     report = BuildReport(texture_set=stack.material().name)
+    report_progress()
     _ensure_channel(stack, assets, "ambient occlusion", textureset.ChannelType.AO, report)
     opacity_added = _ensure_channel(stack, assets, "opacity", textureset.ChannelType.Opacity,
                                     report)
@@ -116,18 +132,30 @@ def build_atlas(grid_size, assets):
     if opacity_added:
         report.notes.append("To see the transparency, the shader must handle opacity "
                             "(Shader Settings in Painter, and the material in the engine).")
+    report_progress()
     sbsar_id = sbsar.get_or_import()
 
     # One undo entry for the whole build; Painter recomputes once at the end.
     with layerstack.ScopedModification("Atlas Mapper - Build Atlas"):
         root = _find_or_create_root(stack, report)
         folders = _AssetFolders(root)
-        built = {}   # asset key -> Atlas ID, for the notes about other folders
-        for asset in sorted(assets, key=lambda a: a.atlas_id):
-            step = _Step()
+        built = {}   # asset key -> asset, for the notes about other folders
+        for done, asset in enumerate(sorted(assets, key=lambda a: a.atlas_id)):
+            report_progress(done, asset.name)
+            entry = folders.find(asset.name)
+            if _is_unchanged(entry, asset, unchanged):
+                # Still in its cell: counts for the notes about other folders.
+                entry.unchanged = True
+                built[asset.name.lower()] = asset
+                report.unchanged.append(entry.name)
+                report.up_to_date.add(asset.name.lower())
+                continue
+            # Each new step (Painter call) also reports progress.
+            step = _Step(lambda d=done, name=asset.name: report_progress(d, name))
             try:
                 if _build_asset(folders, stack, asset, grid_size, sbsar_id, report, step):
                     built[asset.name.lower()] = asset
+                    report.up_to_date.add(asset.name.lower())
             except BuildError:
                 raise   # already written for the artist
             except Exception as error:
@@ -162,27 +190,41 @@ def _ensure_channel(stack, assets, texture_format, channel, report,
     return True
 
 
-def folder_changes(asset_names):
-    """Read only, before the Build: (updated, deleted, hidden).
-    updated = how many assets of asset_names already have their folder (the
-    Build updates it instead of creating one, see _AssetFolders.find);
+def _is_unchanged(entry, asset, unchanged):
+    """True if the Build can leave this asset's folder as is: same
+    fingerprint as at the last Build, folder still there with the same ID."""
+    return (asset.name.lower() in unchanged and entry is not None
+            and entry.atlas_id == asset.atlas_id)
+
+
+def folder_changes(assets, unchanged=frozenset()):
+    """Read only, before the Build: (updated, unchanged, deleted, hidden).
+    updated = how many assets already have their folder and will be rebuilt
+    (see _AssetFolders.find); unchanged = how many folders will be left as
+    is (_is_unchanged);
     deleted / hidden = how many asset folders the Build will delete / hide
-    because their asset is not in asset_names (see
+    because their asset is not in assets (see
     _AssetFolders.remove_withdrawn). Folders already hidden are not counted.
-    (0, 0, 0) when there is nothing to look at (no project, no active
+    (0, 0, 0, 0) when there is nothing to look at (no project, no active
     Texture Set, no "Atlas Mapper" folder)."""
     if not substance_painter.project.is_open():
-        return 0, 0, 0
+        return 0, 0, 0, 0
     try:
         stack = textureset.get_active_stack()
     except RuntimeError:
-        return 0, 0, 0
+        return 0, 0, 0, 0
     roots = _roots(stack)
     if not roots:
-        return 0, 0, 0
+        return 0, 0, 0, 0
     folders = _AssetFolders(roots[0])
-    kept_assets = {name.lower() for name in asset_names}
-    updated = sum(1 for key in kept_assets if folders.find(key) is not None)
+    kept_assets = {asset.name.lower() for asset in assets}
+    updated = same = 0
+    for asset in assets:
+        entry = folders.find(asset.name)
+        if _is_unchanged(entry, asset, unchanged):
+            same += 1
+        elif entry is not None:
+            updated += 1
     deleted = hidden = 0
     for entry in folders.entries:
         if entry.asset_key in kept_assets:
@@ -191,7 +233,7 @@ def folder_changes(asset_names):
             deleted += 1
         elif entry.node.is_visible():
             hidden += 1
-    return updated, deleted, hidden
+    return updated, same, deleted, hidden
 
 
 def _roots(stack):
@@ -270,7 +312,7 @@ class _AssetFolders:
     def add_notes(self, built, report):
         """Folders not built this time, and folders out of Atlas ID order."""
         for entry in self.entries:
-            if entry.built or entry.withdrawn:
+            if entry.built or entry.unchanged or entry.withdrawn:
                 continue
             same_cell = [a.name for a in built.values() if a.atlas_id == entry.atlas_id]
             if same_cell:
@@ -298,6 +340,7 @@ class _Folder:
         self.atlas_id = atlas_id
         self.asset_key = asset_name.lower()
         self.built = False       # built (created or updated) by this Build
+        self.unchanged = False   # left as is: unchanged since the last Build
         self.withdrawn = False   # asset withdrawn from the Build, folder hidden
         self.name_at_start = node.get_name()   # still readable once the node is deleted
 
@@ -338,8 +381,22 @@ def _holds_only_generated(entry):
 
 
 class _Step:
-    """Name of the Painter call in progress (diagnostic only)."""
-    name = "preparation"
+    """Name of the Painter call in progress (for the error message), and a
+    progress report each time it changes (before each Painter call)."""
+
+    def __init__(self, on_change=None):
+        self._name = "preparation"
+        self._on_change = on_change
+
+    @property
+    def name(self):
+        return self._name
+
+    @name.setter
+    def name(self, value):
+        self._name = value
+        if self._on_change is not None:
+            self._on_change()
 
 
 def _routes(stack, asset, report):

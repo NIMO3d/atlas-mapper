@@ -13,7 +13,9 @@ atlas.
 
 ## Features
 
-* Square atlas grids: 2x2, 3x3 and 4x4.
+* Square atlas grids: 2x2, 3x3 and 4x4. The grid is suggested by the mesh
+  UVs (binary FBX or OBJ): set automatically on a new project, and a warning when
+  another grid is chosen.
 * Base Color, Normal (OpenGL / DirectX), Roughness, Metallic, Ambient
   Occlusion, Opacity, Height, Emissive.
 * Packed textures (ORM, RMA...) routed channel by channel.
@@ -21,6 +23,13 @@ atlas.
 * Naming presets, editable in the panel, for each studio's conventions.
 * Build memory: build again after a change in the atlas without starting
   over.
+* Viewport framing: a click on a cell of the grid frames its mesh in the 3D
+  viewport (option "Frame viewport on click"). The mesh of each cell is found
+  from its UVs. Works with meshes imported from a binary FBX or an OBJ file, as long as
+  the file stays where it was imported from.
+* Atlas ID pre-fill: at the scan, an asset whose mesh name matches its
+  texture names gets the ID of the cell holding the mesh's UVs. Only sure
+  IDs are proposed (marked "Pre-filled"); you check them before the Build.
 
 ## Download
 
@@ -63,7 +72,7 @@ in Painter's side toolbar opens it again.
 ## Check the installation
 
 * The panel is greyed while no project is open: open a project.
-* The version is shown under the "Build Atlas" button ("About · v1.0.1").
+* The version is shown under the "Build Atlas" button ("About · v1.1.0").
   Click it for the plugin information.
 
 ## Update to a new version

@@ -9,7 +9,7 @@
         "A keyword can only belong to one texture format.",
         "packed_formats: one file holding several maps, one per channel. 'suffixes' works like texture_formats; R / G / B name the map stored in that channel (a name from texture_formats). Omit a channel if it is unused.",
         "A map found both as its own file and inside a packed file: its own file wins, for that map only.",
-        "glossiness (= Unity smoothness) is an inverted roughness. If an asset has both, roughness wins. mods = Unity HDRP Mask Map, ms = Unity URP / Standard Metallic map with smoothness in A.",
+        "glossiness (= Unity smoothness) is an inverted roughness. If an asset has both, roughness wins. mods = Unity HDRP Mask Map, ms = Unity URP / Standard Metallic map with smoothness in A. _basemap (URP / HDRP) and _albedotransparency (Standard) = Unity base color.",
         "asset_prefixes: removed from the START of asset names (file or subfolder). Longest first, one only. Leave [] to keep names unchanged."
     ],
 
@@ -24,7 +24,7 @@
     ],
 
     "texture_formats": {
-        "base color":        ["_basecolor", "_albedo", "_bc", "_alb", "_d", "_diffuse"],
+        "base color":        ["_basecolor", "_albedo", "_bc", "_alb", "_d", "_diffuse", "_albedotransparency", "_basemap"],
         "normal":            ["_normal", "_nrm", "_n"],
         "roughness":         ["_roughness", "_rough", "_r"],
         "glossiness":        ["_glossiness", "_gloss", "_smoothness", "_smooth"],

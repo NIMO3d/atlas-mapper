@@ -5,7 +5,10 @@ in which atlas cell and computes the status shown in the panel.
 
 Rules (docs/project/workflow.md §12-14, docs/project/uv-transformation.md §3-4):
     - valid Atlas IDs go from 1 to N x N;
-    - assets start WITHOUT an ID: the artist assigns every ID;
+    - assets start WITHOUT an ID, except the IDs restored from the last
+      Build and the sure IDs pre-filled from the mesh names and UVs
+      (core/atlas_prefill.py, workflow.md §12.1); the artist validates,
+      adds and removes IDs;
     - the Atlas ID is separate from the asset name (assigning never renames);
     - two assets cannot share the same Atlas ID;
     - a map found in several files (duplicate) needs the artist to choose
@@ -17,6 +20,11 @@ Rules (docs/project/workflow.md §12-14, docs/project/uv-transformation.md §3-4
       of the source files (one default for all assets, overridable per asset).
       When they differ, the green channel is flipped at creation
       (docs/project/workflow.md §20.1). It never blocks the build;
+    - the format of each normal map file is also detected at scan
+      (processing/normal_detection.py, workflow.md §20.1.1): a sure result
+      pre-fills the asset's format when the artist has not validated one
+      yet; an uncertain result, or a format that differs from the detected
+      one, is a notice. Notices never block the build;
     - packed maps (ORM, RMA...): each map is resolved on its own. A map's own
       file wins; otherwise it comes from the channel of a packed file that
       declares it (docs/project/workflow.md §20.2);
@@ -47,6 +55,8 @@ GLOSSINESS_TEXTURE_FORMAT = "glossiness"
 NORMAL_OPENGL = "opengl"
 NORMAL_DIRECTX = "directx"
 NORMAL_FORMATS = (NORMAL_OPENGL, NORMAL_DIRECTX)
+# Detection result when the image does not say clearly (workflow.md §20.1.1).
+NORMAL_UNCERTAIN = "uncertain"
 
 
 @dataclass(frozen=True)
@@ -84,10 +94,16 @@ class AtlasAssignment:
         # {packed format: {"R": map name, ...}} from the naming preset.
         self.packed_channels = packed_channels or {}
         self._ids = {}     # asset key -> Atlas ID
+        # asset key -> Prefill (core/atlas_prefill.py) of an ID pre-filled at
+        # scan and not touched by the artist since.
+        self._prefilled = {}
         self._chosen = {}  # (asset key, texture format) -> TextureFile chosen among duplicates
         self.project_normal_format = NORMAL_OPENGL   # Painter's default for new projects
         self.default_normal_format = NORMAL_OPENGL   # source files, all assets
         self._normal_formats = {}  # asset key -> normal format chosen for this asset only
+        # File path -> detected format (NORMAL_OPENGL / NORMAL_DIRECTX /
+        # NORMAL_UNCERTAIN); files that could not be analysed are missing.
+        self.normal_detections = {}
 
     @staticmethod
     def _key(asset):
@@ -113,13 +129,31 @@ class AtlasAssignment:
         return self._ids.get(self._key(asset))
 
     def set_atlas_id(self, asset, atlas_id):
-        """Assign an Atlas ID (None removes it)."""
+        """Assign an Atlas ID (None removes it). The ID is no longer marked
+        as pre-filled."""
+        self._prefilled.pop(self._key(asset), None)
         if atlas_id is None:
             self._ids.pop(self._key(asset), None)
             return
         if atlas_id not in self.valid_ids():
             raise ValueError(f"Atlas ID {atlas_id} is outside 1-{self.grid_size ** 2}")
         self._ids[self._key(asset)] = atlas_id
+
+    def apply_prefill(self, prefills):
+        """Pre-fill Atlas IDs: {asset name: Prefill} (core/atlas_prefill.py).
+        Returns the names of the assets changed."""
+        changed = []
+        for asset in self.assets:
+            prefill = prefills.get(asset.name)
+            if prefill is not None and prefill.atlas_id in self.valid_ids():
+                self.set_atlas_id(asset, prefill.atlas_id)
+                self._prefilled[self._key(asset)] = prefill
+                changed.append(asset.name)
+        return changed
+
+    def prefill(self, asset):
+        """Prefill of the asset's ID while the artist has not changed it, or None."""
+        return self._prefilled.get(self._key(asset))
 
     def assets_at(self, atlas_id):
         """Assets placed in a cell (more than one is a conflict)."""
@@ -149,6 +183,46 @@ class AtlasAssignment:
         if normal_format not in NORMAL_FORMATS:
             raise ValueError(f"Unknown normal format {normal_format!r}")
         self._normal_formats[self._key(asset)] = normal_format
+
+    def detected_normal_format(self, asset):
+        """Detected format of the normal map used by this asset, or None (no
+        normal map, file not chosen among duplicates, or not analysed)."""
+        texture = self.resolved_textures(asset).get(NORMAL_TEXTURE_FORMAT)
+        return None if texture is None else self.normal_detections.get(texture.path)
+
+    def apply_normal_detections(self, validated_names=()):
+        """Pre-fill the normal format of the assets from the detection (sure
+        results only). An asset in validated_names (its choices were restored
+        from the last Build) or with its own format is never changed.
+        Returns the names of the assets changed."""
+        validated = {name.lower() for name in validated_names}
+        changed = []
+        for asset in self.assets:
+            if self._key(asset) in validated or self.normal_format_override(asset):
+                continue
+            detected = self.detected_normal_format(asset)
+            if detected in NORMAL_FORMATS and detected != self.default_normal_format:
+                self.set_normal_format_override(asset, detected)
+                changed.append(asset.name)
+        return changed
+
+    def asset_notices(self, asset):
+        """Points to check that never block the build: [AssetIssue]. Today
+        only the normal map format (workflow.md §20.1.1)."""
+        detected = self.detected_normal_format(asset)
+        if detected == NORMAL_UNCERTAIN:
+            return [AssetIssue(
+                "Normal format uncertain",
+                "The format of the normal map could not be detected for sure (mirrored or "
+                "overlapping UVs?): check it visually after the Build.")]
+        used = self.normal_format(asset)
+        if detected in NORMAL_FORMATS and detected != used:
+            labels = {NORMAL_OPENGL: "OpenGL", NORMAL_DIRECTX: "DirectX"}
+            return [AssetIssue(
+                f"Normal looks {labels[detected]}",
+                f"The normal map looks {labels[detected]}, but {labels[used]} is used. "
+                f"Check it visually after the Build, or change \"Source format\".")]
+        return []
 
     def set_project_normal_format(self, normal_format):
         if normal_format not in NORMAL_FORMATS:

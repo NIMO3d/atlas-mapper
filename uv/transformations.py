@@ -1,7 +1,8 @@
-"""Atlas ID -> UVtransform.sbsar parameters.
+"""Atlas ID -> UVtransform.sbsar parameters, and UV point -> Atlas ID.
 
 Pure math: no UI, no Painter API. The formulas are defined in
-docs/project/uv-transformation.md (§5 grid coordinates, §7 .sbsar parameters):
+docs/project/uv-transformation.md (§5 grid coordinates and its inverse,
+§7 .sbsar parameters):
 do not change them here without updating that document.
 """
 
@@ -25,6 +26,20 @@ def grid_coordinates(atlas_id, grid_size):
     x_grid = (atlas_id - 1) % grid_size
     y_grid = grid_size - 1 - ((atlas_id - 1) // grid_size)
     return x_grid, y_grid
+
+
+def atlas_id_at(u, v, grid_size):
+    """Atlas ID of the cell holding the UV point (u, v), or None outside 0-1.
+
+    Inverse of grid_coordinates (uv-transformation.md §5): x_grid = floor(u * N),
+    y_grid = floor(v * N) counted from the bottom, V up. A point on the
+    upper edge (u or v = 1) belongs to the last cell.
+    """
+    if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
+        return None
+    x_grid = min(int(u * grid_size), grid_size - 1)
+    y_grid = min(int(v * grid_size), grid_size - 1)
+    return (grid_size - 1 - y_grid) * grid_size + x_grid + 1
 
 
 def cell_transform(atlas_id, grid_size):

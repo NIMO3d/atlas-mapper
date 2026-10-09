@@ -14,7 +14,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 PLUGIN_NAME = "Atlas Mapper"
 # Shown in the "About" window (ui/about_dialog.py). Raise it at each release.
-PLUGIN_VERSION = "1.0.1"
+PLUGIN_VERSION = "1.1.0"
 # Dark grey (#333333) version of the plugin icon, for the light title bar of
 # every window the plugin opens (the panel itself keeps the light icon).
 _WINDOW_ICON_PATH = os.path.join(
@@ -221,6 +221,9 @@ def show_message(parent, text, warning=False, rich=False):
 
 # Longest line of an explanation (characters), like Painter's info tooltips.
 TOOLTIP_LINE_LENGTH = 50
+# One-letter word followed by a space (wrap_tooltip); letters only: "ID 3"
+# may end a line.
+_SINGLE_LETTER = re.compile(r"(?<!\S)([^\W\d_]) ")
 # Short drop-down lists ("DirectX", "3x3"): same fixed width everywhere in
 # the panel (CONFIGURATION, "Source normal map format" of MAPPING).
 SHORT_FIELD_WIDTH = 120
@@ -236,9 +239,19 @@ _NO_BREAK = (("« ", "« "), (" »", " »"), (" :", " :"), (" ;", " ;"),
 def wrap_tooltip(text):
     """Cut an explanation into lines of at most TOOLTIP_LINE_LENGTH characters,
     between words. A line break written in the text ("\\n") starts a new
-    paragraph; a bullet line ("  • ...") keeps its indent when it wraps."""
+    paragraph; a bullet line ("  • ...") keeps its indent when it wraps.
+
+    Returned as rich text whose lines can no longer be cut: Painter gives its
+    tooltips a maximum width and cut our 50-character lines again, leaving
+    one word alone on a line (seen in Painter on 2026-10-09; plain Qt does
+    not). "" stays "" (no tooltip)."""
+    if not text:
+        return ""
     for space, kept in _NO_BREAK:
         text = text.replace(space, kept)
+    # A one-letter word ("A sure result") goes to the next line with its
+    # word: never alone at the end of a line.
+    text = _SINGLE_LETTER.sub("\\1\u00a0", text)
     lines = []
     for paragraph in text.split("\n"):
         indent = paragraph[:len(paragraph) - len(paragraph.lstrip())]
@@ -246,7 +259,7 @@ def wrap_tooltip(text):
         lines.append(textwrap.fill(
             paragraph, TOOLTIP_LINE_LENGTH, break_on_hyphens=False,  # hyphenated words stay whole
             subsequent_indent=indent + ("   " if bullet else "")) or "")
-    return "\n".join(lines)
+    return "<p style='white-space:pre'>" + html.escape("\n".join(lines), quote=False) + "</p>"
 
 
 class InfoIcon(QtWidgets.QWidget):

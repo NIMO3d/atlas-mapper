@@ -8,6 +8,7 @@ Assets are recognized by name (any case), duplicate files by their path
 relative to the scanned root. Restored choices stay editable.
 """
 
+import hashlib
 from dataclasses import dataclass, field
 
 from .atlas_assignment import NORMAL_FORMATS, AtlasAssignment
@@ -26,8 +27,33 @@ class RestoreReport:
     preset_changed: bool = False                   # scanned with another preset
 
 
-def to_memory(assignment, root_folder, naming_preset):
-    """Plain data (str / int / dict only, as Painter metadata requires)."""
+def asset_fingerprint(asset, grid_size):
+    """Short text that changes whenever a Build of this asset would give
+    another result: grid, Atlas ID, files, packed channels, normal flip
+    (workflow.md §22.3). asset: an AssetToBuild (painter/layer_builder.py)."""
+    data = (grid_size, asset.atlas_id, bool(asset.flip_normal_green),
+            sorted(asset.textures.items()),
+            sorted((fmt, tuple(source)) for fmt, source in asset.packed_maps.items()))
+    return hashlib.sha1(repr(data).encode("utf-8")).hexdigest()[:16]
+
+
+def unchanged_assets(assets, grid_size, memory):
+    """Names (lower case) of the assets whose fingerprint is the same as at
+    the last Build of this memory: the Build can leave their folder as is.
+    Empty when the memory has no fingerprints (built before 2026-10-08)."""
+    if not isinstance(memory, dict) or memory.get("version") != MEMORY_VERSION:
+        return frozenset()
+    saved = memory.get("fingerprints")
+    if not isinstance(saved, dict):
+        return frozenset()
+    return frozenset(asset.name.lower() for asset in assets
+                     if saved.get(asset.name.lower()) == asset_fingerprint(asset, grid_size))
+
+
+def to_memory(assignment, root_folder, naming_preset, fingerprints=None):
+    """Plain data (str / int / dict only, as Painter metadata requires).
+    fingerprints: {asset name in lower case: asset_fingerprint()} of the
+    assets whose folder is up to date after this Build."""
     assets = {}
     for asset in assignment.assets:
         entry = {}
@@ -55,6 +81,7 @@ def to_memory(assignment, root_folder, naming_preset):
         "project_normal_format": assignment.project_normal_format,
         "default_normal_format": assignment.default_normal_format,
         "assets": assets,
+        "fingerprints": dict(fingerprints or {}),
     }
 
 
