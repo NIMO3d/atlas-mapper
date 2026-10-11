@@ -16,7 +16,10 @@ artist's choices.
                 one without deselecting (workflow.md §11.1);
     framing     "Frame viewport on click" check box, under "Grid NxN", left of the grid;
     note        choices restored from the last Build, if any, and the number of
-                Atlas IDs pre-filled from the mesh names and UVs (workflow.md §12.1);
+                Atlas IDs pre-filled from the mesh names and UVs (workflow.md §12.1),
+                then (orange, updated live) the number of Atlas IDs that differ
+                from the mesh UVs, and "mesh file changed since the scan"
+                ("Scan folder" then gets its blue border again);
     normal      default normal format of the source files; an asset can have its
                 own ("Source format" in its details), then shown after its name;
                 the Painter project format is in CONFIGURATION (main_panel.py);
@@ -26,7 +29,8 @@ artist's choices.
                 an asset without ID is greyed: it is not created at Build;
                 the arrow (or a click on the line) unfolds its map details, where
                 the source normal format can be changed for this asset only.
-                Several assets can be unfolded; choosing an ID never unfolds.
+                One asset unfolded at a time (unfolding one folds the other);
+                choosing an ID never unfolds.
                 Hovering a cell or a line outlines the cell (cross-hover).
                 A map taken from a packed file shows its origin in italics ("ORM · B").
 """
@@ -37,9 +41,10 @@ from PySide6 import QtCore, QtWidgets
 
 from ..core.atlas_assignment import (
     GLOSSINESS_TEXTURE_FORMAT, NORMAL_DIRECTX, NORMAL_FORMATS, NORMAL_OPENGL, NORMAL_TEXTURE_FORMAT,
-    NORMAL_UNCERTAIN, STATUS_EMPTY, STATUS_NO_ID, STATUS_READY, STATUS_WARNING, cell_row_column)
+    NORMAL_UNCERTAIN, ROUGHNESS_TEXTURE_FORMAT, STATUS_EMPTY, STATUS_NO_ID, STATUS_READY,
+    STATUS_WARNING, cell_row_column)
 from .widgets import (
-    SHORT_FIELD_WIDTH, ChevronButton, ComboBox, InfoIcon, wrap_tooltip)
+    SHORT_FIELD_WIDTH, WARNING_COLOR, ChevronButton, ComboBox, InfoIcon, wrap_tooltip)
 
 # Status symbols of the asset list (the grid cells show the status by color).
 STATUS_ICONS = {STATUS_READY: "✓", STATUS_WARNING: "⚠", STATUS_NO_ID: "○", STATUS_EMPTY: ""}
@@ -69,6 +74,10 @@ _PREFILL_TEXT = "Pre-filled"
 _PREFILL_TOOLTIP = ("ID {atlas_id} pre-filled from the mesh {meshes}: its name matches this "
                     "asset and its UVs lie in cell {atlas_id}.\nCheck it, or choose another ID.")
 _PREFILL_NOTE = "{count} Atlas ID{s} pre-filled from the mesh names and UVs: check them before the Build."
+# Atlas IDs that differ from the cell read from the mesh UVs (workflow.md §12.1).
+_UV_MISMATCH_NOTE = "⚠ {count} Atlas ID{s} differ{verb} from the mesh UVs: check them before the Build."
+_MESH_CHANGED_NOTE = ("⚠ The mesh file changed since the scan: click \"Scan folder\" to check the "
+                      "Atlas IDs against the new UVs.")
 # Under "Source format": what the scan read in the normal map (workflow.md §20.1.1).
 _DETECTED_TEXTS = {NORMAL_OPENGL: "Detected: OpenGL", NORMAL_DIRECTX: "Detected: DirectX",
                    NORMAL_UNCERTAIN: "Detected: uncertain, check visually"}
@@ -89,7 +98,7 @@ _INFO_ICON_GAP = 20
 # Cell colors: (background, hover background, text). Empty cells are darker.
 # The cell is too small for the status icon: the color of its number shows
 # the status (orange = warning, as the ⚠ icon of the list).
-_WARNING_COLOR = "#e6a23c"  # orange of the plugin's warnings (scan report, preset editor)
+_WARNING_COLOR = WARNING_COLOR
 _CELL_COLORS = {
     STATUS_EMPTY: ("#2b2b2b", "#3a3a3a", "#777777"),
     STATUS_READY: ("#3e3e3e", "#4c4c4c", "#e5e5e5"),
@@ -351,6 +360,17 @@ class MappingWidget(QtWidgets.QWidget):
     # Emitted with the new state when the artist checks / unchecks
     # "Frame viewport on click" (under the grid).
     frame_viewport_changed = QtCore.Signal(bool)
+    # Emitted when the mouse enters the widget: the plugin checks whether the
+    # mesh file changed since the scan (Painter has no event for a reimport).
+    entered = QtCore.Signal()
+
+    def enterEvent(self, event):
+        self.entered.emit()
+        super().enterEvent(event)
+
+    def set_mesh_changed(self, changed):
+        """Show / hide the "mesh changed since the scan" line."""
+        self._mesh_note.setVisible(changed)
 
     def __init__(self, assignment, format_order, restore_report=None, frame_viewport=True,
                  parent=None):
@@ -404,6 +424,21 @@ class MappingWidget(QtWidgets.QWidget):
             prefill_label.setWordWrap(True)
             prefill_label.setStyleSheet("font-style: italic;")  # a status, like the note above
             assets_block.addWidget(prefill_label)
+        # Atlas IDs that no longer match the mesh UVs (atlas changed in the
+        # DCC): follows the artist's ID changes (_refresh).
+        self._uv_note = QtWidgets.QLabel()
+        self._uv_note.setWordWrap(True)
+        self._uv_note.setStyleSheet(f"color: {_WARNING_COLOR}; font-style: italic;")
+        self._uv_note.setVisible(False)
+        assets_block.addWidget(self._uv_note)
+        # Mesh file changed since the scan (reimported, or exported again from
+        # the DCC): the IDs were checked against the old UVs. The artist runs
+        # "Scan folder" again (blue border, main_panel.py).
+        self._mesh_note = QtWidgets.QLabel(_MESH_CHANGED_NOTE)
+        self._mesh_note.setWordWrap(True)
+        self._mesh_note.setStyleSheet(f"color: {_WARNING_COLOR}; font-style: italic;")
+        self._mesh_note.setVisible(False)
+        assets_block.addWidget(self._mesh_note)
         assets_block.addWidget(self._build_normal_rows())
 
         # Only the asset list scrolls: the grid above always stays visible.
@@ -597,8 +632,10 @@ class MappingWidget(QtWidgets.QWidget):
         return container
 
     def _fill_details(self, asset, details):
-        """Map lines (✓ found, — missing, file choice for duplicates), packed
-        files."""
+        """Map lines (✓ found, file choice for duplicates), then the maps not
+        found on one grey line. A packed file has its own line only when it
+        needs a file choice or is not used: otherwise each of its maps
+        already says "RMA · R" (decided 2026-10-11, to keep the list short)."""
         layout = details.layout()
         while layout.count():
             layout.takeAt(0).widget().deleteLater()
@@ -606,9 +643,18 @@ class MappingWidget(QtWidgets.QWidget):
         grouped = asset.textures_by_format()
         maps = self.assignment.resolved_maps(asset)
         glossiness_replaced = self.assignment.glossiness_replaced(asset)
+        not_found = []
         for texture_format in self._format_order:
             textures = grouped.get(texture_format, [])
             source = maps.get(texture_format)
+            if not textures and source is None:
+                # Glossiness is only another form of Roughness: never "not
+                # found". A Roughness given by a Glossiness is not missing either.
+                glossiness_used = maps.get(GLOSSINESS_TEXTURE_FORMAT) is not None
+                if texture_format != GLOSSINESS_TEXTURE_FORMAT and not (
+                        texture_format == ROUGHNESS_TEXTURE_FORMAT and glossiness_used):
+                    not_found.append(texture_format.title())
+                continue
             if len(textures) > 1:
                 layout.addWidget(self._duplicate_choice_row(asset, texture_format, textures))
             elif texture_format == GLOSSINESS_TEXTURE_FORMAT and glossiness_replaced:
@@ -631,24 +677,32 @@ class MappingWidget(QtWidgets.QWidget):
                 label.setToolTip(f"{source.texture.relative_path}\nchannel {source.channel}")
                 layout.addWidget(_hoverable(label))
             else:
-                mark = "✓" if textures else _NO_ID_TEXT
-                label = QtWidgets.QLabel(f"{texture_format.title()}   {mark}")
+                label = QtWidgets.QLabel(f"{texture_format.title()}   ✓")
                 # File name only on hover, to keep the list light.
-                if textures:
-                    label.setToolTip(textures[0].relative_path)
-                    _hoverable(label)  # missing map (—): no highlight
-                layout.addWidget(label)
-            if texture_format == NORMAL_TEXTURE_FORMAT and (textures or source is not None):
+                label.setToolTip(textures[0].relative_path)
+                layout.addWidget(_hoverable(label))
+            if texture_format == NORMAL_TEXTURE_FORMAT:
                 layout.addWidget(self._normal_format_row(asset))
 
         for packed_format, channels in self.assignment.packed_channels.items():
             textures = grouped.get(packed_format, [])
             if len(textures) > 1:
                 layout.addWidget(self._duplicate_choice_row(asset, packed_format, textures))
-            elif textures:
-                label = QtWidgets.QLabel(f"{self.assignment.format_label(packed_format)}   ✓")
+            elif textures and not any(source.packed_format == packed_format
+                                      for source in maps.values()):
+                # Every map of the packed file has its own file (workflow.md §20.2).
+                gap = "&nbsp;" * 3
+                label = QtWidgets.QLabel(
+                    f"{html.escape(self.assignment.format_label(packed_format))}{gap}"
+                    f"<i>not used</i>")
+                label.setTextFormat(QtCore.Qt.RichText)
                 label.setToolTip(self._packed_tooltip(textures[0], channels, grouped))
                 layout.addWidget(_hoverable(label))
+
+        if not_found:
+            label = QtWidgets.QLabel(f"Not found: {', '.join(not_found)}")
+            label.setStyleSheet(f"color: {_UNUSED_COLOR};")
+            layout.addWidget(label)
 
         # The warnings themselves (ID used twice...) are written on the asset
         # line, next to its ⚠ (_refresh): readable without unfolding.
@@ -682,7 +736,8 @@ class MappingWidget(QtWidgets.QWidget):
         detected = self.assignment.detected_normal_format(asset)
         if detected is not None:
             label = QtWidgets.QLabel(_DETECTED_TEXTS[detected])
-            label.setStyleSheet(_NORMAL_BADGE_STYLE)
+            # Italic, lighter under the mouse (it has a tooltip): like "Pre-filled".
+            label.setStyleSheet(_BADGE_HOVER_STYLE.format(extra="font-style: italic;"))
             label.setToolTip(wrap_tooltip(_DETECTED_TOOLTIP))
             row_layout.addWidget(label)
         row_layout.addStretch(1)
@@ -722,6 +777,11 @@ class MappingWidget(QtWidgets.QWidget):
 
     def _refresh(self):
         """Statuses, texts and details: after a selection or an assignment change."""
+        mismatches = sum(1 for asset in self.assignment.assets if self.assignment.uv_cell(asset))
+        self._uv_note.setVisible(bool(mismatches))
+        if mismatches:
+            self._uv_note.setText(_UV_MISMATCH_NOTE.format(
+                count=mismatches, s="s" if mismatches > 1 else "", verb="" if mismatches > 1 else "s"))
         for atlas_id, cell in self._cells.items():
             cell.setText(str(atlas_id))  # status shown by the color (_CELL_COLORS)
             assets = self.assignment.assets_at(atlas_id)
@@ -831,14 +891,31 @@ class MappingWidget(QtWidgets.QWidget):
         self._refresh()
 
     def _toggle_details(self, asset):
-        """Fold / unfold the map details of one asset; it also becomes selected."""
+        """Fold / unfold the map details of one asset; it also becomes selected.
+        One asset unfolded at a time: unfolding one folds the other
+        (2026-10-11, keeps the list short)."""
+        line = next(row[1] for row in self._rows if row[0] is asset)
+        viewport = self._scroll.viewport()
+        line_top = line.mapTo(viewport, QtCore.QPoint(0, 0)).y()
         if id(asset) in self._expanded:
             self._expanded.discard(id(asset))
         else:
-            self._expanded.add(id(asset))
+            self._expanded = {id(asset)}
         self._selected = asset
         self._framed_cell = None  # selected from the list: the next cell click starts over
         self._refresh()
+        # The folded asset may be above: once the layout is updated, keep the
+        # clicked line where it was on screen instead of letting the list jump.
+        QtCore.QTimer.singleShot(0, lambda: self._keep_line_at(line, line_top))
+
+    def _keep_line_at(self, line, line_top):
+        """Scroll the asset list so this line is at line_top in its viewport."""
+        try:
+            bar = self._scroll.verticalScrollBar()
+            shift = line.mapTo(self._scroll.viewport(), QtCore.QPoint(0, 0)).y() - line_top
+        except RuntimeError:
+            return  # list replaced meanwhile (new scan): nothing to keep
+        bar.setValue(bar.value() + shift)
 
     def _on_cell_clicked(self, atlas_id):
         assets = self.assignment.assets_at(atlas_id)
@@ -879,12 +956,26 @@ class MappingWidget(QtWidgets.QWidget):
 
     def _center_on(self, asset):
         """Scroll the asset list so the line of this asset is in the middle
-        (nothing happens when the whole list fits: no scroll bar)."""
+        of the part of the list that can be seen (nothing happens when the
+        whole list fits: no scroll bar).
+
+        When the whole panel scrolls too (window too short, FallbackScroll),
+        the list may hold its lines below the panel's edge and hardly scroll
+        itself: the panel's own scroll then shows the line (2026-10-11)."""
         line = next(row[1] for row in self._rows if row[0] is asset)
         list_widget = self._scroll.widget()
         line_center = line.mapTo(list_widget, line.rect().center()).y()
         bar = self._scroll.verticalScrollBar()
         bar.setValue(line_center - self._scroll.viewport().height() // 2)
+        outer = self._scroll.parentWidget()
+        while outer is not None and not isinstance(outer, QtWidgets.QScrollArea):
+            outer = outer.parentWidget()
+        if outer is None:
+            return
+        top = line.mapTo(outer.viewport(), QtCore.QPoint(0, 0)).y()
+        if top < 0 or top + line.height() > outer.viewport().height():
+            # A margin of two lines: the line does not stick to the edge.
+            outer.ensureWidgetVisible(line, 0, 2 * line.height())
 
     def _on_id_chosen(self, asset, atlas_id):
         self.assignment.set_atlas_id(asset, atlas_id)

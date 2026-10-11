@@ -42,6 +42,9 @@ The zip contains the `atlas_mapper` folder, ready to install.
 
 * Adobe Substance 3D Painter with Python plugins (tested with version 12.1.5).
 * Windows (the plugin has only been tested on Windows).
+* A Painter project in the PBR Metallic / Roughness workflow. Spec/Gloss
+  textures can be used: Glossiness is converted to Roughness, but the
+  Specular color map is not used.
 
 ## Install
 
@@ -72,7 +75,7 @@ in Painter's side toolbar opens it again.
 ## Check the installation
 
 * The panel is greyed while no project is open: open a project.
-* The version is shown under the "Build Atlas" button ("About · v1.1.0").
+* The version is shown under the "Build Atlas" button ("About · v1.2.0").
   Click it for the plugin information.
 
 ## Update to a new version
@@ -104,7 +107,7 @@ Painter layers.
 | --- | --- |
 | `__init__.py` and the `core`, `painter`, `processing`, `ui`, `uv` folders | The plugin code |
 | `resources\UVtransform.sbsar` | The material that places each texture in its atlas cell. Imported automatically into the project at the first Build: never import it yourself |
-| `resources\*.png` | Plugin icons |
+| `resources\*.svg` | Plugin icons |
 | `naming_presets\*.json` | Naming conventions used by the scan (`Default` is always available) |
 | `LICENSE` | The MIT License of the plugin |
 

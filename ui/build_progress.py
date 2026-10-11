@@ -15,7 +15,7 @@ import time
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from .widgets import PLUGIN_NAME, set_window_icon
+from .widgets import MUTED_COLOR, PLUGIN_NAME, set_window_icon
 
 SHOW_DELAY = 0.3          # seconds of Build before the window appears
 _REFRESH_INTERVAL = 0.05  # seconds between two redraws
@@ -26,7 +26,7 @@ _LINE_WIDTH = 1.2         # pixels: thin, like Painter's icons
 _HEAD_LENGTH = 3.0        # pixels: arrow heads
 _WIDTH = 300              # pixels of the text column; a long asset name is cut
 _MARGIN = 20
-_MUTED_STYLE = "color: #999999;"
+_MUTED_STYLE = f"color: {MUTED_COLOR};"
 
 
 class TurningIcon(QtWidgets.QWidget):

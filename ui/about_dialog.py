@@ -7,7 +7,7 @@ import os
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from .widgets import PAINTER_ACCENT, PLUGIN_NAME, PLUGIN_VERSION, set_window_icon
+from .widgets import MUTED_COLOR, PAINTER_ACCENT, PLUGIN_NAME, PLUGIN_VERSION, set_window_icon
 
 _ICON_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "resources", "atlas_mapper_icon.svg")
@@ -28,7 +28,7 @@ _TEXT_GAP = 16        # between the icon and the text column
 _BLOCK_SPACING = 12   # between the text blocks
 _MARGIN = 20          # around the window content
 # Muted text (version, copyright), lighter than the panel's disabled grey.
-_MUTED_STYLE = "color: #999999;"
+_MUTED_STYLE = f"color: {MUTED_COLOR};"
 
 
 class AboutDialog(QtWidgets.QDialog):

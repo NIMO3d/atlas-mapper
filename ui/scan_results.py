@@ -10,7 +10,7 @@ import os
 
 from PySide6 import QtCore, QtWidgets
 
-from .widgets import ChevronButton
+from .widgets import WARNING_COLOR, ChevronButton
 
 _SECTION_STYLE = "font-weight: bold;"
 _HEADER_STYLE = "font-style: italic;"  # the summary line reads as a status, not a setting
@@ -24,7 +24,7 @@ _NO_ASSET_HINT = ("Check that the file names end with a suffix defined in the na
 # Duplicates and accented names in the summary: the orange of the plugin's
 # warnings (the artist must choose or rename a file). Unrecognized files stay
 # neutral: often not a problem.
-_WARNING_COLOR = "#e6a23c"
+_WARNING_COLOR = WARNING_COLOR
 
 
 def build_message(text):

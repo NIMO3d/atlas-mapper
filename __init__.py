@@ -21,7 +21,7 @@ import substance_painter.ui
 
 from .core import build_memory
 from .core.atlas_assignment import NORMAL_OPENGL, AtlasAssignment
-from .core.atlas_prefill import prefill_atlas_ids, suggested_grid_size
+from .core.atlas_prefill import prefill_atlas_ids, suggested_grid_size, uv_cells
 from .core.naming_config import (DEFAULT_PRESET, NamingConfigError, list_presets,
                                  load_texture_attributes)
 from .painter.layer_builder import AssetToBuild, BuildError, build_atlas, folder_changes
@@ -317,6 +317,11 @@ def _on_scan_requested(panel, folder, grid_size):
             lambda checked: _on_frame_viewport_changed(panel, checked))
         mapping.cell_framing_requested.connect(
             lambda atlas_id, again: _on_cell_framing(panel, grid_size, atlas_id, again))
+        # Mesh reimported (or exported again) after this scan: no Painter
+        # event, so the file is checked when the mouse enters the panel.
+        mesh_at_scan = ViewportFramer.mesh_signature()
+        mapping.entered.connect(
+            lambda m=mapping: _show_mesh_changed(panel, m, _mesh_changed(mesh_at_scan)))
         panel.set_mapping(mapping)
         _update_build_state(panel, assignment)  # not ready: no ID yet
         _current["assignment"] = assignment
@@ -329,11 +334,28 @@ def _on_scan_requested(panel, folder, grid_size):
         _refresh_framing(panel, grid_size)
 
 
+def _mesh_changed(mesh_at_scan):
+    """True when the mesh file of the project differs from the one read at
+    the scan (another file, or the same file written again). Unknown on
+    either side (no project, file missing): False, nothing to say."""
+    now = ViewportFramer.mesh_signature()
+    return mesh_at_scan is not None and now is not None and now != mesh_at_scan
+
+
+def _show_mesh_changed(panel, mapping, changed):
+    """Orange line in MAPPING, blue border back on "Scan folder"."""
+    mapping.set_mesh_changed(changed)
+    panel.set_scan_outdated(changed)
+
+
 def _prefill_atlas_ids(assignment, attributes, restore_report):
     """Pre-fill the sure Atlas IDs from the meshes of the project (read in its
     FBX or OBJ, as for the viewport framing). Assets restored from the last Build,
     and the cells they use, are left alone. Problems are only logged: the
-    artist assigns the IDs by hand, as without pre-fill."""
+    artist assigns the IDs by hand, as without pre-fill.
+    The sure cells are also given to the assignment: an Atlas ID that
+    differs from them (restored from a Build before the atlas changed in
+    the DCC) is a notice in the panel."""
     try:
         meshes = _framing["framer"].meshes()
     except FramingError as error:
@@ -352,6 +374,17 @@ def _prefill_atlas_ids(assignment, attributes, restore_report):
     if skipped:
         _log("Atlas IDs not pre-filled: " + "; ".join(
             f"{name} ({reason})" for name, reason in skipped.items()))
+    sure, _unsure, _grid_problem = uv_cells(
+        [asset.name for asset in assignment.assets], meshes, assignment.grid_size,
+        attributes.asset_prefixes)
+    assignment.set_uv_cells(sure)
+    mismatches = [(asset, assignment.uv_cell(asset)) for asset in assignment.assets
+                  if assignment.uv_cell(asset)]
+    if mismatches:
+        _log("Atlas IDs that differ from the mesh UVs: " + "; ".join(
+            f"{asset.name} ID {assignment.atlas_id(asset)}, UVs in cell {cell.atlas_id} "
+            f"({' + '.join(cell.mesh_names)})" for asset, cell in mismatches),
+             substance_painter.logging.WARNING)
 
 
 def _on_frame_viewport_changed(panel, checked):

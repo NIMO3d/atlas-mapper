@@ -100,14 +100,15 @@ def suggested_grid_size(meshes, grid_sizes):
     return None
 
 
-def prefill_atlas_ids(asset_names, meshes, grid_size, prefixes=(), validated=(), taken_ids=()):
-    """Atlas IDs to pre-fill.
+def uv_cells(asset_names, meshes, grid_size, prefixes=()):
+    """Cell of each asset read from the mesh UVs, when it is sure (all its
+    meshes in one cell, no other asset claims that cell).
 
-    asset_names: every scanned asset; meshes: [MeshInfo]; validated: names of
-    the assets whose choices are validated (never changed, but they still
-    own their meshes); taken_ids: cells already used.
-    Returns ({asset name: Prefill}, {asset name: reason not pre-filled}),
-    the reasons only for the assets with a base name, for the Log.
+    Used by the pre-fill, and to warn when an Atlas ID no longer matches the
+    UVs (atlas changed in the DCC, workflow.md §12.1).
+    Returns ({asset name: Prefill}, {asset name: reason not sure},
+    grid problem or None). With a grid problem (one recognized mesh over
+    several cells: the grid is not the atlas's), no cell at all is given.
     """
     cores = {name: base_name(name, prefixes) for name in asset_names}
     meshes_of = {name: [] for name in asset_names}
@@ -128,47 +129,65 @@ def prefill_atlas_ids(asset_names, meshes, grid_size, prefixes=(), validated=(),
             if len(cores[name]) == longest:
                 meshes_of[name].append(mesh)
 
-    validated_keys = {name.lower() for name in validated}
     # One recognized mesh over several cells: the grid is not the atlas's
-    # (a 3x3 grid on a 4x4 atlas still holds the corner meshes): no pre-fill.
+    # (a 3x3 grid on a 4x4 atlas still holds the corner meshes): no cell.
     for name in asset_names:
         spread = [mesh.name for mesh in meshes_of[name] if mesh_cell(mesh, grid_size) is None]
         if spread:
-            reason = (f"the {grid_size}x{grid_size} grid does not match the UVs "
-                      f"({spread[0]} lies over several cells)")
-            return {}, {other: reason for other in asset_names
-                        if cores[other] and other.lower() not in validated_keys}
+            return {}, {}, (f"the {grid_size}x{grid_size} grid does not match the UVs "
+                            f"({spread[0]} lies over several cells)")
 
-    taken = set(taken_ids)
-    candidates, skipped = {}, {}
+    candidates, unsure = {}, {}
     for name in asset_names:
         if not cores[name]:
             continue
         found = meshes_of[name]
         if not found:
-            skipped[name] = "no mesh with a matching name"
+            unsure[name] = "no mesh with a matching name"
             continue
         cells = {mesh_cell(mesh, grid_size) for mesh in found}
         mesh_names = tuple(sorted((mesh.name for mesh in found), key=str.lower))
         if len(cells) > 1:
-            skipped[name] = f"meshes in several cells ({', '.join(mesh_names)})"
+            unsure[name] = f"meshes in several cells ({', '.join(mesh_names)})"
         else:
             candidates[name] = Prefill(cells.pop(), mesh_names)
 
     claims = {}
-    for name, prefill in candidates.items():
-        claims.setdefault(prefill.atlas_id, []).append(name)
-    prefills = {}
-    for name, prefill in candidates.items():
-        others = [other for other in claims[prefill.atlas_id] if other != name]
+    for name, cell in candidates.items():
+        claims.setdefault(cell.atlas_id, []).append(name)
+    sure = {}
+    for name, cell in candidates.items():
+        others = [other for other in claims[cell.atlas_id] if other != name]
+        if others:
+            unsure[name] = f"cell {cell.atlas_id} also matches {', '.join(others)}"
+        else:
+            sure[name] = cell
+    return sure, unsure, None
+
+
+def prefill_atlas_ids(asset_names, meshes, grid_size, prefixes=(), validated=(), taken_ids=()):
+    """Atlas IDs to pre-fill.
+
+    asset_names: every scanned asset; meshes: [MeshInfo]; validated: names of
+    the assets whose choices are validated (never changed, but they still
+    own their meshes); taken_ids: cells already used.
+    Returns ({asset name: Prefill}, {asset name: reason not pre-filled}),
+    the reasons only for the assets with a base name, for the Log.
+    """
+    validated_keys = {name.lower() for name in validated}
+    sure, unsure, grid_problem = uv_cells(asset_names, meshes, grid_size, prefixes)
+    if grid_problem:
+        return {}, {name: grid_problem for name in asset_names
+                    if base_name(name, prefixes) and name.lower() not in validated_keys}
+    taken = set(taken_ids)
+    prefills, skipped = {}, dict(unsure)
+    for name, cell in sure.items():
         if name.lower() in validated_keys:
             continue   # choices of the last Build: kept, nothing to report
-        if others:
-            skipped[name] = f"cell {prefill.atlas_id} also matches {', '.join(others)}"
-        elif prefill.atlas_id in taken:
-            skipped[name] = f"cell {prefill.atlas_id} already used"
+        if cell.atlas_id in taken:
+            skipped[name] = f"cell {cell.atlas_id} already used"
         else:
-            prefills[name] = prefill
+            prefills[name] = cell
     for name in list(skipped):
         if name.lower() in validated_keys:
             del skipped[name]

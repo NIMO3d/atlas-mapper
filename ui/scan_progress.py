@@ -17,13 +17,13 @@ import time
 from PySide6 import QtCore, QtWidgets
 
 from .build_progress import TurningIcon
-from .widgets import PLUGIN_NAME, set_window_icon
+from .widgets import MUTED_COLOR, PLUGIN_NAME, set_window_icon
 
 SHOW_DELAY = 0.5        # seconds of scan before the window appears
 _REFRESH_INTERVAL = 0.1  # seconds between two refreshes of the window
 _WIDTH = 360            # pixels of the text column; a long folder path is cut in the middle
 _MARGIN = 20
-_MUTED_STYLE = "color: #999999;"  # current folder, like the About window's muted texts
+_MUTED_STYLE = f"color: {MUTED_COLOR};"  # current folder, like the About window's muted texts
 
 
 class ScanProgressDialog(QtWidgets.QDialog):

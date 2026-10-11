@@ -61,6 +61,20 @@ class ViewportFramer:
         self._load()
         return list(self._meshes)
 
+    @staticmethod
+    def mesh_signature():
+        """(path, modification time, size) of the project's mesh file, or
+        None. Cheap (the file is not read): compared after a scan to tell
+        the artist the mesh changed (Painter has no event for a mesh reimport)."""
+        try:
+            path = substance_painter.project.last_imported_mesh_path()
+            stat = os.stat(path) if path else None
+        except (OSError, *_API_ERRORS):
+            return None
+        if stat is None:
+            return None
+        return os.path.normcase(path), stat.st_mtime, stat.st_size
+
     def frame(self, target):
         """Move the viewport camera onto a Target. Raises FramingError."""
         try:

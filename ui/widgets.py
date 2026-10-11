@@ -14,7 +14,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 PLUGIN_NAME = "Atlas Mapper"
 # Shown in the "About" window (ui/about_dialog.py). Raise it at each release.
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.2.0"
 # Dark grey (#333333) version of the plugin icon, for the light title bar of
 # every window the plugin opens (the panel itself keeps the light icon).
 _WINDOW_ICON_PATH = os.path.join(
@@ -25,6 +25,9 @@ _PAINTER_SEPARATOR = "#262626"
 _PAINTER_TITLE = "#e5e5e5"
 _PAINTER_TITLE_DISABLED = "#999999"  # greyed title while no project is open
 PAINTER_ACCENT = "#378ef0"  # blue frame of Painter's active panel
+# Plugin colors used by several windows: one place to change them.
+WARNING_COLOR = "#e6a23c"  # orange of the warnings (scan report, asset list, preset editor)
+MUTED_COLOR = "#999999"    # secondary texts (About, scan and Build windows)
 _PAINTER_BACKGROUND = "#333333"
 
 # Section titles (bold, light grey), as in native Painter panels.

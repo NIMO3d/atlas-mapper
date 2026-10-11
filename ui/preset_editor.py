@@ -16,7 +16,7 @@ from ..core.naming_config import (
     check_new_preset_name, check_preset_data, list_presets, read_preset_data, rename_preset,
     save_preset)
 from .widgets import (
-    SECTION_TITLE_STYLE, ChevronButton, ComboBox, CrossButton, InfoIcon, Separator, set_window_icon,
+    SECTION_TITLE_STYLE, WARNING_COLOR, ChevronButton, ComboBox, CrossButton, InfoIcon, Separator, set_window_icon,
     show_message)
 
 _UNUSED_CHANNEL = "—"
@@ -49,7 +49,7 @@ _SUFFIX_EXAMPLES = {
     "height": "_height, _disp",
     "emissive": "_emissive, _emit",
 }
-_WARNING_STYLE = "QLabel { color: #e6a23c; font-style: italic; }"  # same orange as the scan warnings
+_WARNING_STYLE = f"QLabel {{ color: {WARNING_COLOR}; font-style: italic; }}"  # same orange as the scan warnings
 # Spacing (pixels).
 _ROW_SPACING = 8
 _LABEL_GAP = 12           # between a label and the field after it

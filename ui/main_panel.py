@@ -45,7 +45,9 @@ _REBUILD_ALL_TOOLTIP = (
     "Unchecked again after each Build.")
 
 # Above "Build Atlas" while assets placed in the grid still have a warning.
-_BUILD_NOTE = "Please note: Fix the ⚠ of the assets that have an ID before \"Build Atlas\"."
+# Line above "Build Atlas" while the mesh changed since the scan (workflow.md §12.1).
+_MESH_CHANGED_SUMMARY = "mesh changed, click \"Scan folder\" before the Build"
+_BUILD_NOTE ="Please note: Fix the ⚠ of the assets that have an ID before \"Build Atlas\"."
 
 _PROJECT_NORMAL_TOOLTIP = ("Set here the normal map format chosen when the Painter project was "
                            "created.\n"
@@ -585,6 +587,7 @@ class AtlasMapperPanel(QtWidgets.QWidget):
         self._clear_layout(self.report_layout)
         self._clear_layout(self.mapping_layout)
         self._scanned = False
+        self._scan_outdated = False
         self._build_ready = False
         self._build_counts = (0, 0, 0, 0, 0, 0)
         self.set_rebuild_all(False)  # belongs to the scan shown
@@ -599,7 +602,15 @@ class AtlasMapperPanel(QtWidgets.QWidget):
         self._clear_layout(self.report_layout)
         self.report_layout.addWidget(widget)
         self._scanned = succeeded
+        self._scan_outdated = False
         self._update_buttons()
+
+    def set_scan_outdated(self, outdated):
+        """The mesh file changed since the scan (workflow.md §12.1): "Scan
+        folder" gets its blue border again, as the next step."""
+        if outdated != self._scan_outdated:
+            self._scan_outdated = outdated
+            self._update_buttons()
 
     def set_mapping(self, widget):
         """Show the grid + asset list in the MAPPING section."""
@@ -679,6 +690,7 @@ class AtlasMapperPanel(QtWidgets.QWidget):
     # ------------------------------------------------------------------
 
     _scanned = False
+    _scan_outdated = False   # mesh file changed since the scan (set_scan_outdated)
     _build_ready = False
     # Grid suggested by the mesh UVs (None: unknown); grid set by the plugin
     # (no confirmation); last grid applied (a return to it does not rescan).
@@ -710,24 +722,28 @@ class AtlasMapperPanel(QtWidgets.QWidget):
             button.setEnabled(bool(preset) and not protected)
             button.setToolTip(f"\"{PROTECTED_PRESET}\" is protected: create a copy with +"
                               if protected else f"{action} the selected preset")
-        self.build_button.setEnabled(self._build_ready)
-        self.build_summary.setVisible(self._build_ready)
-        summary = _build_summary_text(*self._build_counts)
+        # Mesh changed since the scan: the IDs were checked against the old
+        # UVs, no Build before "Scan folder" (one blue button at a time).
+        buildable = self._build_ready and not self._scan_outdated
+        self.build_button.setEnabled(buildable)
+        self.build_summary.setVisible(self._build_ready or self._scan_outdated)
+        summary = (_MESH_CHANGED_SUMMARY if self._scan_outdated
+                   else _build_summary_text(*self._build_counts))
         if self._build_target:  # where the Build goes: a project can hold several atlases
             summary = f"Texture Set \"{self._build_target}\" · {summary}"
         self.build_summary.setText(summary)
         # Only when asset folders exist: on a first Build everything is new.
         existing = self._build_counts[4] + self._build_counts[5]
-        self.rebuild_all_row.setVisible(self._build_ready and existing > 0)
+        self.rebuild_all_row.setVisible(buildable and existing > 0)
         placed = self._build_counts[0]
-        self.build_note.setVisible(not self._build_ready and placed > 0)
+        self.build_note.setVisible(not self._build_ready and placed > 0 and not self._scan_outdated)
         self.source_hint.setVisible(not self._scanned)
 
         # Blue border on the next step only ("Build Atlas" has it whenever enabled).
         self.browse_button.setStyleSheet(
             SQUARE_BUTTON_STYLE + ("" if folder_ok else _NEXT_STEP_STYLE))
         self.scan_button.setStyleSheet(
-            _NEXT_STEP_STYLE if folder_ok and not self._scanned else "")
+            _NEXT_STEP_STYLE if folder_ok and (not self._scanned or self._scan_outdated) else "")
 
     def _on_browse_clicked(self):
         folder = QtWidgets.QFileDialog.getExistingDirectory(

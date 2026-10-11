@@ -9,6 +9,9 @@ Rules (docs/project/workflow.md §12-14, docs/project/uv-transformation.md §3-4
       Build and the sure IDs pre-filled from the mesh names and UVs
       (core/atlas_prefill.py, workflow.md §12.1); the artist validates,
       adds and removes IDs;
+    - an Atlas ID that differs from the cell surely read from the mesh UVs
+      (atlas changed in the DCC, mesh reimported) is a notice: the ID is
+      never changed by the plugin;
     - the Atlas ID is separate from the asset name (assigning never renames);
     - two assets cannot share the same Atlas ID;
     - a map found in several files (duplicate) needs the artist to choose
@@ -97,6 +100,7 @@ class AtlasAssignment:
         # asset key -> Prefill (core/atlas_prefill.py) of an ID pre-filled at
         # scan and not touched by the artist since.
         self._prefilled = {}
+        self._uv_cells = {}  # asset key -> Prefill: cell surely read from the mesh UVs
         self._chosen = {}  # (asset key, texture format) -> TextureFile chosen among duplicates
         self.project_normal_format = NORMAL_OPENGL   # Painter's default for new projects
         self.default_normal_format = NORMAL_OPENGL   # source files, all assets
@@ -155,6 +159,21 @@ class AtlasAssignment:
         """Prefill of the asset's ID while the artist has not changed it, or None."""
         return self._prefilled.get(self._key(asset))
 
+    def set_uv_cells(self, cells):
+        """Cells surely read from the mesh UVs: {asset name: Prefill}
+        (core/atlas_prefill.py, uv_cells)."""
+        self._uv_cells = {name.lower(): cell for name, cell in cells.items()
+                          if cell.atlas_id in self.valid_ids()}
+
+    def uv_cell(self, asset):
+        """Cell read from the mesh UVs when it differs from the asset's Atlas
+        ID (Prefill), or None. No notice for an asset without ID."""
+        cell = self._uv_cells.get(self._key(asset))
+        atlas_id = self.atlas_id(asset)
+        if cell is None or atlas_id is None or cell.atlas_id == atlas_id:
+            return None
+        return cell
+
     def assets_at(self, atlas_id):
         """Assets placed in a cell (more than one is a conflict)."""
         return [asset for asset in self.assets if self.atlas_id(asset) == atlas_id]
@@ -207,22 +226,32 @@ class AtlasAssignment:
         return changed
 
     def asset_notices(self, asset):
-        """Points to check that never block the build: [AssetIssue]. Today
-        only the normal map format (workflow.md §20.1.1)."""
+        """Points to check that never block the build: [AssetIssue]. The
+        Atlas ID that differs from the mesh UVs (workflow.md §12.1) and the
+        normal map format (workflow.md §20.1.1)."""
+        notices = []
+        cell = self.uv_cell(asset)
+        if cell is not None:
+            meshes = " + ".join(cell.mesh_names)
+            notices.append(AssetIssue(
+                f"UVs in cell {cell.atlas_id}",
+                f"The UVs of {meshes} now lie in cell {cell.atlas_id}, but ID "
+                f"{self.atlas_id(asset)} is used. Atlas changed in the DCC? Choose ID "
+                f"{cell.atlas_id}, or keep {self.atlas_id(asset)} if it is intentional."))
         detected = self.detected_normal_format(asset)
+        used = self.normal_format(asset)
+        labels = {NORMAL_OPENGL: "OpenGL", NORMAL_DIRECTX: "DirectX"}
         if detected == NORMAL_UNCERTAIN:
-            return [AssetIssue(
+            notices.append(AssetIssue(
                 "Normal format uncertain",
                 "The format of the normal map could not be detected for sure (mirrored or "
-                "overlapping UVs?): check it visually after the Build.")]
-        used = self.normal_format(asset)
-        if detected in NORMAL_FORMATS and detected != used:
-            labels = {NORMAL_OPENGL: "OpenGL", NORMAL_DIRECTX: "DirectX"}
-            return [AssetIssue(
+                "overlapping UVs?): check it visually after the Build."))
+        elif detected in NORMAL_FORMATS and detected != used:
+            notices.append(AssetIssue(
                 f"Normal looks {labels[detected]}",
                 f"The normal map looks {labels[detected]}, but {labels[used]} is used. "
-                f"Check it visually after the Build, or change \"Source format\".")]
-        return []
+                f"Check it visually after the Build, or change \"Source format\"."))
+        return notices
 
     def set_project_normal_format(self, normal_format):
         if normal_format not in NORMAL_FORMATS:
