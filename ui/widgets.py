@@ -14,7 +14,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 PLUGIN_NAME = "Atlas Mapper"
 # Shown in the "About" window (ui/about_dialog.py). Raise it at each release.
-PLUGIN_VERSION = "1.2.0"
+PLUGIN_VERSION = "1.2.1"
 # Dark grey (#333333) version of the plugin icon, for the light title bar of
 # every window the plugin opens (the panel itself keeps the light icon).
 _WINDOW_ICON_PATH = os.path.join(

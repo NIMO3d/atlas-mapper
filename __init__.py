@@ -223,9 +223,12 @@ def _forget_project(panel):
     _framing["index"].clear()
     _framing["errors_shown"].clear()
     panel.set_suggested_grid(None)
+    # Scan results cleared first: otherwise the grid change below counts as
+    # the artist's and rescans the folder with no project open.
+    panel.clear_results()
     # Empty field, grid back to the first one of the list: the next project
     # starts from the defaults (or its own Build / mesh).
-    panel.set_source("", DEFAULT_GRID_SIZE)  # the scan results are cleared too
+    panel.set_source("", DEFAULT_GRID_SIZE)
     panel.set_project_normal_format(NORMAL_OPENGL)  # Painter's default for a new project
     panel.set_project_open(False)
 
