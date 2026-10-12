@@ -75,9 +75,15 @@ _PREFILL_TOOLTIP = ("ID {atlas_id} pre-filled from the mesh {meshes}: its name m
                     "asset and its UVs lie in cell {atlas_id}.\nCheck it, or choose another ID.")
 _PREFILL_NOTE = "{count} Atlas ID{s} pre-filled from the mesh names and UVs: check them before the Build."
 # Atlas IDs that differ from the cell read from the mesh UVs (workflow.md §12.1).
-_UV_MISMATCH_NOTE = "⚠ {count} Atlas ID{s} differ{verb} from the mesh UVs: check them before the Build."
-_MESH_CHANGED_NOTE = ("⚠ The mesh file changed since the scan: click \"Scan folder\" to check the "
-                      "Atlas IDs against the new UVs.")
+_UV_MISMATCH_NOTE = "⚠ {count} Atlas ID{s} differ{verb} from the mesh UVs: fix them before the Build."
+# State of the project's mesh file (workflow.md §12.1): exported again from the
+# DCC but not yet reimported in Painter, or reimported since the scan.
+MESH_NOT_REIMPORTED = "not reimported"
+MESH_REIMPORTED = "reimported"
+_MESH_NOTES = {
+    MESH_NOT_REIMPORTED: "⚠ Mesh file changed on disk: reimport it (Edit > Project configuration).",
+    MESH_REIMPORTED: "⚠ Mesh reimported since the scan: click \"Scan folder\".",
+}
 # Under "Source format": what the scan read in the normal map (workflow.md §20.1.1).
 _DETECTED_TEXTS = {NORMAL_OPENGL: "Detected: OpenGL", NORMAL_DIRECTX: "Detected: DirectX",
                    NORMAL_UNCERTAIN: "Detected: uncertain, check visually"}
@@ -368,9 +374,11 @@ class MappingWidget(QtWidgets.QWidget):
         self.entered.emit()
         super().enterEvent(event)
 
-    def set_mesh_changed(self, changed):
-        """Show / hide the "mesh changed since the scan" line."""
-        self._mesh_note.setVisible(changed)
+    def set_mesh_state(self, state):
+        """Show the line of a mesh state (MESH_NOT_REIMPORTED, MESH_REIMPORTED),
+        or hide it (None)."""
+        self._mesh_note.setText(_MESH_NOTES.get(state, ""))
+        self._mesh_note.setVisible(state is not None)
 
     def __init__(self, assignment, format_order, restore_report=None, frame_viewport=True,
                  parent=None):
@@ -434,7 +442,7 @@ class MappingWidget(QtWidgets.QWidget):
         # Mesh file changed since the scan (reimported, or exported again from
         # the DCC): the IDs were checked against the old UVs. The artist runs
         # "Scan folder" again (blue border, main_panel.py).
-        self._mesh_note = QtWidgets.QLabel(_MESH_CHANGED_NOTE)
+        self._mesh_note = QtWidgets.QLabel()
         self._mesh_note.setWordWrap(True)
         self._mesh_note.setStyleSheet(f"color: {_WARNING_COLOR}; font-style: italic;")
         self._mesh_note.setVisible(False)
@@ -777,7 +785,7 @@ class MappingWidget(QtWidgets.QWidget):
 
     def _refresh(self):
         """Statuses, texts and details: after a selection or an assignment change."""
-        mismatches = sum(1 for asset in self.assignment.assets if self.assignment.uv_cell(asset))
+        mismatches = len(self.assignment.uv_mismatches())
         self._uv_note.setVisible(bool(mismatches))
         if mismatches:
             self._uv_note.setText(_UV_MISMATCH_NOTE.format(

@@ -75,7 +75,7 @@ in Painter's side toolbar opens it again.
 ## Check the installation
 
 * The panel is greyed while no project is open: open a project.
-* The version is shown under the "Build Atlas" button ("About · v1.2.1").
+* The version is shown under the "Build Atlas" button ("About · v1.2.0").
   Click it for the plugin information.
 
 ## Update to a new version

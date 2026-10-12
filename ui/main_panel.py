@@ -17,7 +17,7 @@ from ..core.atlas_assignment import NORMAL_FORMATS, NORMAL_OPENGL
 from ..core.naming_config import (
     DEFAULT_PRESET, PROTECTED_PRESET, NamingConfigError, delete_preset, is_protected_preset)
 from .about_dialog import AboutDialog
-from .mapping import NORMAL_LABELS
+from .mapping import MESH_NOT_REIMPORTED, MESH_REIMPORTED, NORMAL_LABELS
 from .preset_editor import PresetEditorDialog
 from .widgets import (
     NOTE_STYLE, PAINTER_ACCENT, SECTION_TITLE_STYLE, SHORT_FIELD_WIDTH, SQUARE_BUTTON_STYLE,
@@ -45,9 +45,15 @@ _REBUILD_ALL_TOOLTIP = (
     "Unchecked again after each Build.")
 
 # Above "Build Atlas" while assets placed in the grid still have a warning.
-# Line above "Build Atlas" while the mesh changed since the scan (workflow.md §12.1).
-_MESH_CHANGED_SUMMARY = "mesh changed, click \"Scan folder\" before the Build"
+# Line above "Build Atlas" while the mesh changed (workflow.md §12.1).
+_MESH_SUMMARIES = {
+    MESH_NOT_REIMPORTED: "mesh not reimported, reimport it before the Build",
+    MESH_REIMPORTED: "mesh changed, click \"Scan folder\" before the Build",
+}
 _BUILD_NOTE ="Please note: Fix the ⚠ of the assets that have an ID before \"Build Atlas\"."
+# Same place, when Atlas IDs differ from the mesh UVs (workflow.md §12.1).
+_UV_MISMATCH_BUILD_NOTE = ("Please note: Fix the Atlas IDs that differ from the mesh UVs before "
+                           "\"Build Atlas\".")
 
 _PROJECT_NORMAL_TOOLTIP = ("Set here the normal map format chosen when the Painter project was "
                            "created.\n"
@@ -587,7 +593,7 @@ class AtlasMapperPanel(QtWidgets.QWidget):
         self._clear_layout(self.report_layout)
         self._clear_layout(self.mapping_layout)
         self._scanned = False
-        self._scan_outdated = False
+        self._mesh_state = None
         self._build_ready = False
         self._build_counts = (0, 0, 0, 0, 0, 0)
         self.set_rebuild_all(False)  # belongs to the scan shown
@@ -602,14 +608,15 @@ class AtlasMapperPanel(QtWidgets.QWidget):
         self._clear_layout(self.report_layout)
         self.report_layout.addWidget(widget)
         self._scanned = succeeded
-        self._scan_outdated = False
+        self._mesh_state = None
         self._update_buttons()
 
-    def set_scan_outdated(self, outdated):
-        """The mesh file changed since the scan (workflow.md §12.1): "Scan
-        folder" gets its blue border again, as the next step."""
-        if outdated != self._scan_outdated:
-            self._scan_outdated = outdated
+    def set_mesh_state(self, state):
+        """The mesh file changed (workflow.md §12.1): MESH_NOT_REIMPORTED or
+        MESH_REIMPORTED ("Scan folder" gets its blue border again, as the next
+        step), None when nothing changed. No Build in either state."""
+        if state != self._mesh_state:
+            self._mesh_state = state
             self._update_buttons()
 
     def set_mapping(self, widget):
@@ -618,19 +625,21 @@ class AtlasMapperPanel(QtWidgets.QWidget):
         self.mapping_layout.addWidget(widget, 1)  # takes the height: its list scrolls
 
     def set_build_ready(self, ready, placed=0, ignored=0, deleted=0, hidden=0, updated=0,
-                        unchanged=0, texture_set=""):
+                        unchanged=0, texture_set="", uv_mismatches=0):
         """Enable "Build Atlas" (decided by AtlasAssignment.can_build).
 
         placed / ignored: assets with / without an Atlas ID; updated / unchanged:
         placed assets whose folder already exists, rebuilt / left as is;
         deleted / hidden: folders of
-        withdrawn assets; texture_set: where the Build goes (the active one).
+        withdrawn assets; texture_set: where the Build goes (the active one);
+        uv_mismatches: Atlas IDs that differ from the mesh UVs (they block it).
         When the build is possible, a line above the button says where, and
         what will be created, updated and removed.
         """
         self._build_ready = ready
         self._build_counts = (placed, ignored, deleted, hidden, updated, unchanged)
         self._build_target = texture_set
+        self._uv_mismatches = uv_mismatches
         self._update_buttons()
 
     def rebuild_all(self):
@@ -690,7 +699,7 @@ class AtlasMapperPanel(QtWidgets.QWidget):
     # ------------------------------------------------------------------
 
     _scanned = False
-    _scan_outdated = False   # mesh file changed since the scan (set_scan_outdated)
+    _mesh_state = None   # mesh file changed (set_mesh_state)
     _build_ready = False
     # Grid suggested by the mesh UVs (None: unknown); grid set by the plugin
     # (no confirmation); last grid applied (a return to it does not rescan).
@@ -701,6 +710,7 @@ class AtlasMapperPanel(QtWidgets.QWidget):
     #  assets to update, assets unchanged)
     _build_counts = (0, 0, 0, 0, 0, 0)
     _build_target = ""  # Texture Set the Build goes into
+    _uv_mismatches = 0  # Atlas IDs that differ from the mesh UVs
 
     @staticmethod
     def _disable_focus_frame(button):
@@ -722,13 +732,13 @@ class AtlasMapperPanel(QtWidgets.QWidget):
             button.setEnabled(bool(preset) and not protected)
             button.setToolTip(f"\"{PROTECTED_PRESET}\" is protected: create a copy with +"
                               if protected else f"{action} the selected preset")
-        # Mesh changed since the scan: the IDs were checked against the old
-        # UVs, no Build before "Scan folder" (one blue button at a time).
-        buildable = self._build_ready and not self._scan_outdated
+        # Mesh changed: the IDs were checked against other UVs than the
+        # viewport's, no Build before the reimport / "Scan folder" (one blue
+        # button at a time).
+        buildable = self._build_ready and self._mesh_state is None
         self.build_button.setEnabled(buildable)
-        self.build_summary.setVisible(self._build_ready or self._scan_outdated)
-        summary = (_MESH_CHANGED_SUMMARY if self._scan_outdated
-                   else _build_summary_text(*self._build_counts))
+        self.build_summary.setVisible(self._build_ready or self._mesh_state is not None)
+        summary = _MESH_SUMMARIES.get(self._mesh_state) or _build_summary_text(*self._build_counts)
         if self._build_target:  # where the Build goes: a project can hold several atlases
             summary = f"Texture Set \"{self._build_target}\" · {summary}"
         self.build_summary.setText(summary)
@@ -736,14 +746,15 @@ class AtlasMapperPanel(QtWidgets.QWidget):
         existing = self._build_counts[4] + self._build_counts[5]
         self.rebuild_all_row.setVisible(buildable and existing > 0)
         placed = self._build_counts[0]
-        self.build_note.setVisible(not self._build_ready and placed > 0 and not self._scan_outdated)
+        self.build_note.setText(_UV_MISMATCH_BUILD_NOTE if self._uv_mismatches else _BUILD_NOTE)
+        self.build_note.setVisible(not self._build_ready and placed > 0 and self._mesh_state is None)
         self.source_hint.setVisible(not self._scanned)
 
         # Blue border on the next step only ("Build Atlas" has it whenever enabled).
         self.browse_button.setStyleSheet(
             SQUARE_BUTTON_STYLE + ("" if folder_ok else _NEXT_STEP_STYLE))
         self.scan_button.setStyleSheet(
-            _NEXT_STEP_STYLE if folder_ok and (not self._scanned or self._scan_outdated) else "")
+            _NEXT_STEP_STYLE if folder_ok and (not self._scanned or self._mesh_state == MESH_REIMPORTED) else "")
 
     def _on_browse_clicked(self):
         folder = QtWidgets.QFileDialog.getExistingDirectory(

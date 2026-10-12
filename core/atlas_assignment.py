@@ -339,9 +339,16 @@ class AtlasAssignment:
         """Assets with an Atlas ID: the only ones used at creation."""
         return [asset for asset in self.assets if self.atlas_id(asset) is not None]
 
+    def uv_mismatches(self):
+        """Assets whose Atlas ID differs from the cell of their mesh UVs."""
+        return [asset for asset in self.assets if self.uv_cell(asset)]
+
     def can_build(self):
+        """Every placed asset ready, and no Atlas ID that differs from the
+        mesh UVs (the textures would land in another cell, workflow.md §12.1)."""
         placed = self.placed_assets()
-        return bool(placed) and all(self.asset_status(a) == STATUS_READY for a in placed)
+        return (bool(placed) and all(self.asset_status(a) == STATUS_READY for a in placed)
+                and not self.uv_mismatches())
 
     def asset_issues(self, asset):
         """Problems the artist has to look at: [AssetIssue], one per

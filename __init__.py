@@ -33,7 +33,7 @@ from .painter.viewport_camera import FramingError, ViewportFramer
 from .processing.normal_detection import detect_normal_maps
 from .processing.scanner import ScanCancelled, ScanError, scan_folder
 from .ui.build_progress import BuildProgressDialog
-from .ui.mapping import MappingWidget
+from .ui.mapping import MESH_NOT_REIMPORTED, MESH_REIMPORTED, MappingWidget
 from .ui.main_panel import DEFAULT_GRID_SIZE, GRID_SIZES, AtlasMapperPanel
 from .ui.scan_progress import ScanProgressDialog
 from .ui.scan_results import ScanReportWidget, build_scan_cancelled, build_scan_error
@@ -56,6 +56,12 @@ _current = {"assignment": None, "texture_set": None, "normal_confirmed": set()}
 # enabled: "Frame viewport on click", kept on this computer like the preset.
 _framing = {"framer": ViewportFramer(), "mapping": None, "index": {}, "errors_shown": set(),
             "enabled": True}
+
+# Mesh file as Painter last loaded it: its signature when the project entered
+# edition (opening, or reimport of the mesh, which leaves and enters edition
+# again; checked in Painter 2026-10-12). None: unknown. A file that differs
+# was exported again from the DCC but not reimported (workflow.md §12.1).
+_loaded_mesh = {"signature": None}
 
 # Project events followed by the plugin: (event class, callback), disconnected
 # in close_plugin().
@@ -107,7 +113,13 @@ def start_plugin():
             (substance_painter.event.ProjectClosed, lambda _event: _forget_project(panel))):
         substance_painter.event.DISPATCHER.connect_strong(event_cls, callback)
         _event_callbacks.append((event_cls, callback))
+    # Painter has just loaded the mesh file (project opened, mesh reimported).
+    callback = lambda _event: _loaded_mesh.update(signature=ViewportFramer.mesh_signature())
+    substance_painter.event.DISPATCHER.connect_strong(
+        substance_painter.event.ProjectEditionEntered, callback)
+    _event_callbacks.append((substance_painter.event.ProjectEditionEntered, callback))
     if substance_painter.project.is_open():  # plugin enabled with a project already open
+        _loaded_mesh["signature"] = ViewportFramer.mesh_signature()
         _open_project(panel)
     else:
         panel.set_project_open(False)
@@ -222,6 +234,7 @@ def _forget_project(panel):
     _framing["mapping"] = None
     _framing["index"].clear()
     _framing["errors_shown"].clear()
+    _loaded_mesh["signature"] = None
     panel.set_suggested_grid(None)
     # Scan results cleared first: otherwise the grid change below counts as
     # the artist's and rescans the folder with no project open.
@@ -320,11 +333,12 @@ def _on_scan_requested(panel, folder, grid_size):
             lambda checked: _on_frame_viewport_changed(panel, checked))
         mapping.cell_framing_requested.connect(
             lambda atlas_id, again: _on_cell_framing(panel, grid_size, atlas_id, again))
-        # Mesh reimported (or exported again) after this scan: no Painter
-        # event, so the file is checked when the mouse enters the panel.
+        # Mesh exported again or reimported after this scan: the file is
+        # checked when the mouse enters the panel.
         mesh_at_scan = ViewportFramer.mesh_signature()
         mapping.entered.connect(
-            lambda m=mapping: _show_mesh_changed(panel, m, _mesh_changed(mesh_at_scan)))
+            lambda m=mapping: _show_mesh_state(panel, m, _mesh_state(mesh_at_scan)))
+        _show_mesh_state(panel, mapping, _mesh_state(mesh_at_scan))
         panel.set_mapping(mapping)
         _update_build_state(panel, assignment)  # not ready: no ID yet
         _current["assignment"] = assignment
@@ -337,18 +351,28 @@ def _on_scan_requested(panel, folder, grid_size):
         _refresh_framing(panel, grid_size)
 
 
-def _mesh_changed(mesh_at_scan):
-    """True when the mesh file of the project differs from the one read at
-    the scan (another file, or the same file written again). Unknown on
-    either side (no project, file missing): False, nothing to say."""
+def _mesh_state(mesh_at_scan):
+    """MESH_NOT_REIMPORTED when the mesh file differs from the one Painter
+    loaded (exported again from the DCC, the viewport still shows the old
+    mesh), MESH_REIMPORTED when it differs from the one read at the scan,
+    None otherwise. Unknown signatures (no project, file missing): nothing
+    to say."""
     now = ViewportFramer.mesh_signature()
-    return mesh_at_scan is not None and now is not None and now != mesh_at_scan
+    if now is None:
+        return None
+    loaded = _loaded_mesh["signature"]
+    if loaded is not None and now != loaded:
+        return MESH_NOT_REIMPORTED
+    if mesh_at_scan is not None and now != mesh_at_scan:
+        return MESH_REIMPORTED
+    return None
 
 
-def _show_mesh_changed(panel, mapping, changed):
-    """Orange line in MAPPING, blue border back on "Scan folder"."""
-    mapping.set_mesh_changed(changed)
-    panel.set_scan_outdated(changed)
+def _show_mesh_state(panel, mapping, state):
+    """Orange line in MAPPING; "Build Atlas" disabled, and blue border back on
+    "Scan folder" after a reimport."""
+    mapping.set_mesh_state(state)
+    panel.set_mesh_state(state)
 
 
 def _prefill_atlas_ids(assignment, attributes, restore_report):
@@ -514,7 +538,8 @@ def _update_build_state(panel, assignment):
     # The Build goes into the active Texture Set: named above the button.
     panel.set_build_ready(assignment.can_build(), placed, len(assignment.assets) - placed,
                           deleted, hidden, updated, unchanged,
-                          texture_set=active_texture_set() or "")
+                          texture_set=active_texture_set() or "",
+                          uv_mismatches=len(assignment.uv_mismatches()))
 
 
 def _on_build_requested(panel, grid_size):
